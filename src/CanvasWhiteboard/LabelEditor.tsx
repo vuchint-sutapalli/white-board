@@ -45,7 +45,7 @@ export const LabelEditor = forwardRef<HTMLTextAreaElement, LabelEditorProps>(
 			textAlign: "center",
 			minWidth: "80px",
 			outline: "none",
-			fontFamily: "sans-serif",
+			fontFamily: "'vrgil', sans-serif",
 			fontSize: "16px",
 			overflow: "hidden", // Hide scrollbar
 		};

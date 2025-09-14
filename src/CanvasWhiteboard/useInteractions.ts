@@ -357,7 +357,7 @@ export const useInteractions = ({
 				y: startPos.y,
 				text: "",
 				fontSize: 24,
-				fontFamily: "sans-serif",
+				fontFamily: "'virgil', sans-serif",
 			};
 			setEditingElement(newEl);
 			// We don't call updateElements yet, that will happen in handleLabelUpdate

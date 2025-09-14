@@ -71,7 +71,7 @@ export const getHandles = (
 			const textEl = el as TextElement;
 			// `width` and `height` on text elements are not always up to date.
 			// We must measure the text to get accurate dimensions for handle placement.
-			const { width, height } = measureText(textEl.text, textEl.fontSize, textEl.fontFamily || 'sans-serif');
+			const { width, height } = measureText(textEl.text, textEl.fontSize, textEl.fontFamily || "'virgil', sans-serif");
 			return [
 				{ type: 'bottom-right', x: textEl.x + width, y: textEl.y + height },
 				{ type: 'copy', x: textEl.x + width / 2, y: textEl.y + COPY_HANDLE_OFFSET },
@@ -103,7 +103,7 @@ const measureText = (
 	// This is a simple measurement. For more accuracy, you might need a hidden DOM element or more complex canvas logic.
 	// For multiline text, this would need to be more sophisticated.
 	const dummyContext = document.createElement("canvas").getContext("2d")!;
-	dummyContext.font = `${fontSize}px ${fontFamily}`;
+	dummyContext.font = `${fontSize}px ${fontFamily || "virgil', sans-serif"}`;
 	const lines = text.split("\n");
 	const widths = lines.map((line) => dummyContext.measureText(line).width);
 	return { width: Math.max(...widths), height: lines.length * fontSize };
@@ -395,8 +395,9 @@ export const getElementCenter = (element: Element): Point => {
 		return { x: element.x + width / 2, y: element.y + height / 2 };
 	} else if (element.type === "pencil") {
 		const { minX, minY, maxX, maxY } = getPencilElementBounds(element);
-		const width = maxX - minX, height = maxY - minY;
-		return { x: element.x + width / 2, y: element.y + height / 2 };
+		const width = maxX - minX;
+		const height = maxY - minY;
+		return { x: minX + width / 2, y: minY + height / 2 };
 	}
 	// Fallback for unknown types
 	return { x: element.x, y: element.y };

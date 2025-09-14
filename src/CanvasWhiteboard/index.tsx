@@ -1,4 +1,10 @@
-import React, { useRef, useState, useEffect, useCallback } from "react";
+import React, {
+	useRef,
+	useState,
+	useEffect,
+	useCallback,
+	useLayoutEffect,
+} from "react";
 import type { Element, ElementType } from "./types";
 import { STORAGE_KEY } from "./constants";
 import { useDrawing } from "./useDrawing";
@@ -12,6 +18,7 @@ import {
 import { LabelEditor } from "./LabelEditor";
 
 const CanvasWhiteboard: React.FC = () => {
+	const containerRef = useRef<HTMLDivElement>(null);
 	const staticCanvasRef = useRef<HTMLCanvasElement>(null);
 	const activeCanvasRef = useRef<HTMLCanvasElement>(null);
 	const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -19,6 +26,8 @@ const CanvasWhiteboard: React.FC = () => {
 		new WeakMap()
 	);
 
+	const [width, setWidth] = useState(0);
+	const [height, setHeight] = useState(0);
 	const [elements, setElements] = useState<Element[]>(() => {
 		try {
 			const saved = localStorage.getItem(STORAGE_KEY);
@@ -41,6 +50,27 @@ const CanvasWhiteboard: React.FC = () => {
 		x: number;
 		y: number;
 	} | null>(null);
+
+	useLayoutEffect(() => {
+		const updateCanvasSize = () => {
+			const container = containerRef.current;
+			if (container) {
+				const newWidth = container.offsetWidth;
+				const newHeight = container.offsetHeight;
+				if (newWidth !== width || newHeight !== height) {
+					setWidth(newWidth);
+					setHeight(newHeight);
+					// on resize, we need to invalidate the cache
+					elementCanvasMap.current = new WeakMap();
+				}
+			}
+		};
+
+		updateCanvasSize(); // Initial size
+
+		window.addEventListener("resize", updateCanvasSize);
+		return () => window.removeEventListener("resize", updateCanvasSize);
+	}, [width, height]); // Rerun on size change to handle potential external changes
 
 	// Load/Save effects
 	useEffect(() => {
@@ -123,6 +153,8 @@ const CanvasWhiteboard: React.FC = () => {
 		editingElement,
 		selectionRect,
 		drawingAngleInfo,
+		width,
+		height,
 	});
 
 	const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -193,64 +225,122 @@ const CanvasWhiteboard: React.FC = () => {
 	};
 
 	return (
-		<div>
-			<div style={{ marginBottom: 10 }}>
-				<span style={{ marginRight: 10 }}>
-					Current Tool: <strong>{selectedTool}</strong>
-				</span>
-				<button onClick={() => setSelectedTool("selection")}>Select</button>
-				<button onClick={() => setSelectedTool("rectangle")}>Rectangle</button>
-				<button onClick={() => setSelectedTool("diamond")}>Diamond</button>
-				<button onClick={() => setSelectedTool("circle")}>Circle</button>
-				<button onClick={() => setSelectedTool("arrow")}>Arrow</button>
-				<button onClick={() => setSelectedTool("pencil")}>Pencil</button>
-				<button onClick={() => setSelectedTool("text")}>Text</button>
-				<button onClick={() => setSelectedTool("line")}>Line</button>
+		<div
+			ref={containerRef}
+			className="app-container font-virgil"
+			style={{ width: "100%", height: "100%" }}
+		>
+			<div className="toolbar absolute w-100vw z-50">
 				<button
+					className={`toolbar-button ${
+						selectedTool === "selection" ? "active" : ""
+					}`}
+					onClick={() => setSelectedTool("selection")}
+				>
+					Select
+				</button>
+				<button
+					className={`toolbar-button ${
+						selectedTool === "rectangle" ? "active" : ""
+					}`}
+					onClick={() => setSelectedTool("rectangle")}
+				>
+					Rectangle
+				</button>
+				<button
+					className={`toolbar-button ${
+						selectedTool === "diamond" ? "active" : ""
+					}`}
+					onClick={() => setSelectedTool("diamond")}
+				>
+					Diamond
+				</button>
+				<button
+					className={`toolbar-button ${
+						selectedTool === "circle" ? "active" : ""
+					}`}
+					onClick={() => setSelectedTool("circle")}
+				>
+					Circle
+				</button>
+				<button
+					className={`toolbar-button ${
+						selectedTool === "arrow" ? "active" : ""
+					}`}
+					onClick={() => setSelectedTool("arrow")}
+				>
+					Arrow
+				</button>
+				<button
+					className={`toolbar-button ${
+						selectedTool === "pencil" ? "active" : ""
+					}`}
+					onClick={() => setSelectedTool("pencil")}
+				>
+					Pencil
+				</button>
+				<button
+					className={`toolbar-button ${
+						selectedTool === "text" ? "active" : ""
+					}`}
+					onClick={() => setSelectedTool("text")}
+				>
+					Text
+				</button>
+				<button
+					className={`toolbar-button ${
+						selectedTool === "line" ? "active" : ""
+					}`}
+					onClick={() => setSelectedTool("line")}
+				>
+					Line
+				</button>
+				<button
+					className="toolbar-button"
 					onClick={handleDeleteSelected}
 					disabled={selectedElements.length === 0}
 				>
 					Delete Selected
 				</button>
-				<button onClick={handleClear}>Clear</button>
+				<button className="toolbar-button" onClick={handleClear}>
+					Clear
+				</button>
 			</div>
 
-			<div style={{ position: "relative" }}>
-				{editingElement && editorPosition && (
-					<LabelEditor
-						ref={textAreaRef}
-						value={labelText}
-						onChange={handleLabelChange}
-						onBlur={handleLabelUpdate}
-						onKeyDown={handleLabelKeyDown}
-						style={{
-							top: editorPosition.y,
-							left: editorPosition.x,
-						}}
-					/>
-				)}
-				<canvas
-					ref={staticCanvasRef}
-					width={800}
-					height={600}
+			{editingElement && editorPosition && (
+				<LabelEditor
+					ref={textAreaRef}
+					value={labelText}
+					onChange={handleLabelChange}
+					onBlur={handleLabelUpdate}
+					onKeyDown={handleLabelKeyDown}
 					style={{
-						border: "1px solid black",
-						position: "absolute",
-						left: 0,
-						top: 0,
+						top: editorPosition.y,
+						left: editorPosition.x,
 					}}
 				/>
-				<canvas
-					ref={activeCanvasRef}
-					width={800}
-					height={600}
-					style={{ position: "absolute", left: 0, top: 0 }}
-					onPointerDown={handlePointerDown}
-					onPointerMove={handlePointerMove}
-					onPointerUp={handlePointerUp}
-					onDoubleClick={handleDoubleClick}
-				/>
-			</div>
+			)}
+			<canvas
+				ref={staticCanvasRef}
+				width={width}
+				height={height}
+				style={{
+					position: "absolute",
+					left: 0,
+					top: 0,
+					border: "1px solid #ccc",
+				}}
+			/>
+			<canvas
+				ref={activeCanvasRef}
+				width={width}
+				height={height}
+				style={{ position: "absolute", left: 0, top: 0, zIndex: 1 }}
+				onPointerDown={handlePointerDown}
+				onPointerMove={handlePointerMove}
+				onPointerUp={handlePointerUp}
+				onDoubleClick={handleDoubleClick}
+			/>
 		</div>
 	);
 };

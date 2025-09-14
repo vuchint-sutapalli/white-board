@@ -225,7 +225,7 @@ const drawElement = (
 		}
 	} else if (el.type === "text") {
 		const textEl = el as TextElement;
-		ctx.font = `${textEl.fontSize}px ${textEl.fontFamily}`;
+		ctx.font = `${textEl.fontSize}px ${textEl.fontFamily || "'virgil', sans-serif"}`;
 		ctx.textBaseline = "top";
 		ctx.fillStyle = highlight ? "red" : "black";
 		textEl.text.split("\n").forEach((line, index) => {
@@ -304,6 +304,8 @@ interface UseDrawingProps {
 	editingElement: Element | null;
 	selectionRect: RectangleElement | null;
 	drawingAngleInfo: { angle: number; x: number; y: number } | null;
+	width: number;
+	height: number;
 }
 
 export const useDrawing = ({
@@ -315,6 +317,8 @@ export const useDrawing = ({
 	editingElement,
 	selectionRect,
 	drawingAngleInfo,
+	width,
+	height,
 }: UseDrawingProps) => {
 	const copyIconRef = useRef<HTMLImageElement | null>(null);
 	const rotationIconRef = useRef<HTMLImageElement | null>(null);
@@ -338,16 +342,20 @@ export const useDrawing = ({
 	const createElementSnapshot = useCallback(
 		(el: Element) => {
 			const offCanvas = document.createElement("canvas");
-			offCanvas.width = 800;
-			offCanvas.height = 600;
+			offCanvas.width = width;
+			offCanvas.height = height;
 			const ctx = offCanvas.getContext("2d")!;
 			drawElement(ctx, el, false, null, null);
 			elementCanvasMap.current?.set(el, offCanvas);
 		},
-		[elementCanvasMap]
+		[elementCanvasMap, width, height]
 	);
 
 	useLayoutEffect(() => {
+		if (width === 0 || height === 0) {
+			return;
+		}
+
 		const staticCanvas = staticCanvasRef.current;
 		if (!staticCanvas) return;
 		const staticCtx = staticCanvas.getContext("2d")!;
@@ -400,5 +408,7 @@ export const useDrawing = ({
 		elementCanvasMap,
 		createElementSnapshot,
 		drawingAngleInfo,
+		width,
+		height,
 	]);
 };
