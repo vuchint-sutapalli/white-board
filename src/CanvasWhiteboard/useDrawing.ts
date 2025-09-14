@@ -298,7 +298,6 @@ const drawAngleIndicator = (
 interface UseDrawingProps {
 	staticCanvasRef: RefObject<HTMLCanvasElement>;
 	activeCanvasRef: RefObject<HTMLCanvasElement>;
-	elementCanvasMap: RefObject<WeakMap<Element, HTMLCanvasElement>>;
 	elements: Element[];
 	selectedElements: Element[];
 	editingElement: Element | null;
@@ -306,12 +305,14 @@ interface UseDrawingProps {
 	drawingAngleInfo: { angle: number; x: number; y: number } | null;
 	width: number;
 	height: number;
+	virtualWidth: number;
+	virtualHeight: number;
+	viewTransform: { scale: number; offsetX: number; offsetY: number };
 }
 
 export const useDrawing = ({
 	staticCanvasRef,
 	activeCanvasRef,
-	elementCanvasMap,
 	elements,
 	selectedElements,
 	editingElement,
@@ -319,6 +320,9 @@ export const useDrawing = ({
 	drawingAngleInfo,
 	width,
 	height,
+	virtualWidth,
+	virtualHeight,
+	viewTransform,
 }: UseDrawingProps) => {
 	const copyIconRef = useRef<HTMLImageElement | null>(null);
 	const rotationIconRef = useRef<HTMLImageElement | null>(null);
@@ -339,18 +343,6 @@ export const useDrawing = ({
 		};
 	}, []);
 
-	const createElementSnapshot = useCallback(
-		(el: Element) => {
-			const offCanvas = document.createElement("canvas");
-			offCanvas.width = width;
-			offCanvas.height = height;
-			const ctx = offCanvas.getContext("2d")!;
-			drawElement(ctx, el, false, null, null);
-			elementCanvasMap.current?.set(el, offCanvas);
-		},
-		[elementCanvasMap, width, height]
-	);
-
 	useLayoutEffect(() => {
 		if (width === 0 || height === 0) {
 			return;
@@ -361,26 +353,30 @@ export const useDrawing = ({
 		const staticCtx = staticCanvas.getContext("2d")!;
 		staticCtx.clearRect(0, 0, staticCanvas.width, staticCanvas.height);
 
+		// Apply view transform
+		staticCtx.save();
+		staticCtx.translate(viewTransform.offsetX, viewTransform.offsetY);
+		staticCtx.scale(viewTransform.scale, viewTransform.scale);
+
 		const selectedIds = new Set(
 			selectedElements.map((el) => el.id).concat(editingElement ? [editingElement.id] : [])
 		);
 
-		elements
-			.filter((el) => !selectedIds.has(el.id))
-			.forEach((el) => {
-				if (!elementCanvasMap.current?.has(el)) {
-					createElementSnapshot(el);
-				}
-				const snapshot = elementCanvasMap.current?.get(el);
-				if (snapshot) {
-					staticCtx.drawImage(snapshot, 0, 0);
-				}
-			});
+		elements.filter((el) => !selectedIds.has(el.id)).forEach((el) => {
+			drawElement(staticCtx, el, false, null, null);
+		});
+
+		staticCtx.restore();
 
 		const activeCanvas = activeCanvasRef.current;
 		if (!activeCanvas) return;
 		const activeCtx = activeCanvas.getContext("2d")!;
 		activeCtx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
+
+		// Apply view transform to active canvas as well
+		activeCtx.save();
+		activeCtx.translate(viewTransform.offsetX, viewTransform.offsetY);
+		activeCtx.scale(viewTransform.scale, viewTransform.scale);
 
 		selectedElements.forEach((el) => {
 			// Draw the element with its highlight, which won't include the label
@@ -395,8 +391,15 @@ export const useDrawing = ({
 			drawSelectionRect(activeCtx, selectionRect);
 		}
 
+		activeCtx.restore();
+
+		// Draw angle indicator in screen space, after restoring the transform
 		if (drawingAngleInfo) {
-			drawAngleIndicator(activeCtx, drawingAngleInfo);
+			const screenX =
+				drawingAngleInfo.x * viewTransform.scale + viewTransform.offsetX;
+			const screenY =
+				drawingAngleInfo.y * viewTransform.scale + viewTransform.offsetY;
+			drawAngleIndicator(activeCtx, { ...drawingAngleInfo, x: screenX, y: screenY });
 		}
 	}, [
 		elements,
@@ -404,11 +407,12 @@ export const useDrawing = ({
 		editingElement,
 		selectionRect,
 		staticCanvasRef,
-		activeCanvasRef,
-		elementCanvasMap,
-		createElementSnapshot,
+		activeCanvasRef,		
 		drawingAngleInfo,
 		width,
 		height,
+		virtualWidth,
+		virtualHeight,
+		viewTransform,
 	]);
 };

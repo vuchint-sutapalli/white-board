@@ -75,7 +75,8 @@ export type HandleType =
 	| "rotation"
 	| "curve";
 
-export type Action = "none" | "drawing" | "dragging" | "resizing" | "multi-selecting" | "placing" | "rotating" | "curving";
+export type Action = "none" | "drawing" | "dragging" | "resizing" | "multi-selecting" | "placing" | "rotating" | "curving" | "panning";
+
 
 export interface Point {
 	x: number;

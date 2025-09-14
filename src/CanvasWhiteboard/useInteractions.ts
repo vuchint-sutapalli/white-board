@@ -30,6 +30,10 @@ interface UseInteractionsProps {
 	setSelectedTool: (tool: ElementType) => void;
 	setEditingElement: (element: Element | null) => void;
 	setDrawingAngleInfo: (info: { angle: number; x: number; y: number } | null) => void;
+	viewTransform: { scale: number; offsetX: number; offsetY: number };
+	setViewTransform: (transform: { scale: number; offsetX: number; offsetY: number }) => void;
+	isSpacePressed: boolean;
+	isCtrlPressed: boolean;
 }
 
 export const useInteractions = ({
@@ -42,6 +46,10 @@ export const useInteractions = ({
 	setSelectedTool,
 	setEditingElement,
 	setDrawingAngleInfo,
+	viewTransform,
+	setViewTransform,
+	isSpacePressed,
+	isCtrlPressed,
 }: UseInteractionsProps) => {
 	const [action, setAction] = useState<Action>("none");
 	const [selectionRect, setSelectionRect] = useState<RectangleElement | null>(
@@ -50,6 +58,11 @@ export const useInteractions = ({
 	const [resizeHandle, setResizeHandle] = useState<HandleType | null>(null);
 	const [startPos, setStartPos] = useState<Point>({ x: 0, y: 0 });
 	const [dragOffset, setDragOffset] = useState<Point>({ x: 0, y: 0 });
+	const activePointers = useRef<Map<number, Point>>(new Map());
+	const panStartRef = useRef<{
+		point: Point;
+		viewTransform: { offsetX: number; offsetY: number };
+	}>({ point: { x: 0, y: 0 }, viewTransform: { offsetX: 0, offsetY: 0 } });
 
 	const rotationCenterRef = useRef<Point | null>(null);
 	const initialRotationRef = useRef<number>(0);
@@ -59,20 +72,45 @@ export const useInteractions = ({
 		const canvas = activeCanvasRef.current;
 		if (!canvas) return;
 
+		if (isSpacePressed || isCtrlPressed) {
+			canvas.style.cursor = 'grab';
+			return;
+		}
+
 		switch (selectedTool) {
 			case "selection":
 				canvas.style.cursor = "default";
 				break;
 			case "rectangle":
+			case "diamond":
+			case "circle":
+			case "arrow":
 			case "pencil":
 			case "line":
 			case "rotation":
 				canvas.style.cursor = "crosshair";
 				break;
+			case 'text':
+				canvas.style.cursor = 'text';
+				break;
 		}
-	}, [selectedTool, activeCanvasRef]);
+	}, [selectedTool, activeCanvasRef, isSpacePressed, isCtrlPressed]);
 
 	const getCanvasPos = useCallback(
+		(event: React.PointerEvent<HTMLCanvasElement>) => {
+			const canvas = activeCanvasRef.current!;
+			const rect = canvas.getBoundingClientRect();
+			const screenX = event.clientX - rect.left;
+			const screenY = event.clientY - rect.top;
+			// Convert screen coordinates to world coordinates
+			const worldX = (screenX - viewTransform.offsetX) / viewTransform.scale;
+			const worldY = (screenY - viewTransform.offsetY) / viewTransform.scale;
+			return { x: worldX, y: worldY };
+		},
+		[activeCanvasRef, viewTransform]
+	);
+
+	const getScreenPos = useCallback(
 		(event: React.PointerEvent<HTMLCanvasElement>) => {
 			const canvas = activeCanvasRef.current!;
 			const rect = canvas.getBoundingClientRect();
@@ -170,6 +208,49 @@ export const useInteractions = ({
 
 	const handlePointerDown = useCallback(
 		(e: React.PointerEvent<HTMLCanvasElement>) => {
+			activePointers.current.set(e.pointerId, getScreenPos(e));
+
+			// Panning takes precedence
+			if (e.button === 1 || isSpacePressed || isCtrlPressed || activePointers.current.size > 1) {
+				// if we are drawing, we want to stop that.
+				if (action === 'drawing' && selectedElements.length > 0) {
+					const newElements = elements.filter(el => el.id !== selectedElements[0].id);
+					updateElements(newElements);
+					setSelectedElements([]);
+				}
+				// for two-finger panning, we need to recalculate the pan start point
+				// to be the center of the two fingers.
+				if (action !== 'panning' && activePointers.current.size > 1) {
+					setAction('panning');
+					const pointers = Array.from(activePointers.current.values());
+					panStartRef.current.point = {
+						x: (pointers[0].x + pointers[1].x) / 2,
+						y: (pointers[0].y + pointers[1].y) / 2,
+					};
+					panStartRef.current.viewTransform.offsetX = viewTransform.offsetX;
+					panStartRef.current.viewTransform.offsetY = viewTransform.offsetY;
+				}
+
+				setAction('panning');
+				panStartRef.current = {
+					point: getScreenPos(e),
+					viewTransform: {
+						offsetX: viewTransform.offsetX,
+						offsetY: viewTransform.offsetY,
+					},
+				};
+
+				if (activePointers.current.size > 1) {
+					const pointers = Array.from(activePointers.current.values());
+					panStartRef.current.point = {
+						x: (pointers[0].x + pointers[1].x) / 2,
+						y: (pointers[0].y + pointers[1].y) / 2,
+					};
+				}
+
+				return;
+			}
+
 			const pos = getCanvasPos(e);
 			if (selectedTool === "selection") {
 				handleSelectionInteraction(e, pos);
@@ -177,13 +258,39 @@ export const useInteractions = ({
 				handleDrawingInteraction(pos);
 			}
 		},
-		[getCanvasPos, selectedTool, elements, selectedElements, setSelectedElements, updateElements]
+		[getCanvasPos, getScreenPos, selectedTool, elements, selectedElements, setSelectedElements, updateElements, isSpacePressed, isCtrlPressed, viewTransform.offsetX, viewTransform.offsetY, action]
 	);
 
 	const handlePointerMove = useCallback(
 		(e: React.PointerEvent<HTMLCanvasElement>) => {
-			const pos = getCanvasPos(e);
+			if (activePointers.current.has(e.pointerId)) {
+				activePointers.current.set(e.pointerId, getScreenPos(e));
+			}
+
 			const canvas = activeCanvasRef.current!;
+			if (action === 'panning') {
+				canvas.style.cursor = 'grabbing';
+				let currentScreenPos = getScreenPos(e);
+
+				if (activePointers.current.size > 1) {
+					const pointers = Array.from(activePointers.current.values());
+					currentScreenPos = {
+						x: (pointers[0].x + pointers[1].x) / 2,
+						y: (pointers[0].y + pointers[1].y) / 2,
+					};
+				}
+
+				const panDeltaX = currentScreenPos.x - panStartRef.current.point.x;
+				const panDeltaY = currentScreenPos.y - panStartRef.current.point.y;
+				setViewTransform({
+					...viewTransform,
+					offsetX: panStartRef.current.viewTransform.offsetX + panDeltaX,
+					offsetY: panStartRef.current.viewTransform.offsetY + panDeltaY,
+				});
+				return;
+			}
+
+			const pos = getCanvasPos(e);
 
 			if (action === "placing") {
 				const distance = Math.hypot(pos.x - startPos.x, pos.y - startPos.y);
@@ -194,6 +301,10 @@ export const useInteractions = ({
 				return;
 			}
 			if (action === "none" && selectedTool === "selection") {
+				if (isSpacePressed || isCtrlPressed) {
+					canvas.style.cursor = 'grab';
+					return;
+				}
 				const el = getElementAtPosition(elements, pos);
 				if (el) {
 					const handle = hitTestHandle(el, pos);
@@ -345,10 +456,21 @@ export const useInteractions = ({
 				setStartPos(pos);
 			}
 		},
-		[action, getCanvasPos, selectedTool, selectedElements, startPos, dragOffset, resizeHandle, elements, selectionRect, activeCanvasRef, setSelectedElements, setDrawingAngleInfo]
+		[action, getCanvasPos, getScreenPos, selectedTool, selectedElements, startPos, dragOffset, resizeHandle, elements, selectionRect, activeCanvasRef, setSelectedElements, setDrawingAngleInfo, isSpacePressed, isCtrlPressed, setViewTransform, viewTransform]
 	);
 
-	const handlePointerUp = useCallback(() => {
+	const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+		activePointers.current.delete(e.pointerId);
+		const canvas = activeCanvasRef.current;
+		if (action === 'panning') {
+			if (canvas) {
+				canvas.style.cursor = (isSpacePressed || isCtrlPressed) ? 'grab' : 'default';
+			}
+			// A pan action always ends on pointer up.
+			setAction('none');
+			return;
+		}
+
 		if (action === "placing" && selectedTool === "text") {
 			const newEl: TextElement = {
 				id: generateId(),
@@ -358,6 +480,8 @@ export const useInteractions = ({
 				text: "",
 				fontSize: 24,
 				fontFamily: "'virgil', sans-serif",
+				width: 0, // Initialize width
+				height: 0, // and height
 			};
 			setEditingElement(newEl);
 			// We don't call updateElements yet, that will happen in handleLabelUpdate
@@ -385,11 +509,13 @@ export const useInteractions = ({
 		rotationCenterRef.current = null;
 
 		if (action === "drawing") {
-			setSelectedTool("selection");
+			if (selectedTool !== "pencil") {
+				setSelectedTool("selection");
+			}
 		} else if (action === "placing") {
 			setSelectedTool("selection");
 		}
-	}, [action, selectedElements, updateElements, elements, selectionRect, setSelectedElements, setSelectedTool, setDrawingAngleInfo, setEditingElement, startPos, selectedTool]);
+	}, [action, selectedElements, updateElements, elements, selectionRect, setSelectedElements, setSelectedTool, setDrawingAngleInfo, setEditingElement, startPos, selectedTool, isSpacePressed, isCtrlPressed, activeCanvasRef]);
 
 	return { selectionRect, handlePointerDown, handlePointerMove, handlePointerUp };
 };

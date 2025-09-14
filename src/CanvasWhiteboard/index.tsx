@@ -1,9 +1,9 @@
 import React, {
 	useRef,
 	useState,
+	useLayoutEffect,
 	useEffect,
 	useCallback,
-	useLayoutEffect,
 } from "react";
 import type { Element, ElementType } from "./types";
 import { STORAGE_KEY } from "./constants";
@@ -14,20 +14,29 @@ import {
 	getElementAtPosition,
 	getElementCenter,
 	roundElementProperties,
+	resizeElement,
 } from "./element";
 import { LabelEditor } from "./LabelEditor";
+import { Toolbar } from "./Toolbar";
+
+const VIRTUAL_WIDTH = 1280;
+const VIRTUAL_HEIGHT = 720;
 
 const CanvasWhiteboard: React.FC = () => {
 	const containerRef = useRef<HTMLDivElement>(null);
+	const toolbarRef = useRef<HTMLDivElement>(null);
 	const staticCanvasRef = useRef<HTMLCanvasElement>(null);
 	const activeCanvasRef = useRef<HTMLCanvasElement>(null);
 	const textAreaRef = useRef<HTMLTextAreaElement>(null);
-	const elementCanvasMap = useRef<WeakMap<Element, HTMLCanvasElement>>(
-		new WeakMap()
-	);
 
 	const [width, setWidth] = useState(0);
 	const [height, setHeight] = useState(0);
+	const [toolbarHeight, setToolbarHeight] = useState(0);
+	const [viewTransform, setViewTransform] = useState({
+		scale: 1,
+		offsetX: 0,
+		offsetY: 0,
+	});
 	const [elements, setElements] = useState<Element[]>(() => {
 		try {
 			const saved = localStorage.getItem(STORAGE_KEY);
@@ -50,27 +59,45 @@ const CanvasWhiteboard: React.FC = () => {
 		x: number;
 		y: number;
 	} | null>(null);
+	const [isSpacePressed, setIsSpacePressed] = useState(false);
+	const [isCtrlPressed, setIsCtrlPressed] = useState(false);
 
 	useLayoutEffect(() => {
-		const updateCanvasSize = () => {
-			const container = containerRef.current;
-			if (container) {
-				const newWidth = container.offsetWidth;
-				const newHeight = container.offsetHeight;
-				if (newWidth !== width || newHeight !== height) {
-					setWidth(newWidth);
-					setHeight(newHeight);
-					// on resize, we need to invalidate the cache
-					elementCanvasMap.current = new WeakMap();
+		const container = containerRef.current;
+		const toolbar = toolbarRef.current;
+		if (!container || !toolbar) return;
+
+		const updateSizes = () => {
+			const newToolbarHeight = toolbar.offsetHeight;
+			if (newToolbarHeight !== toolbarHeight) {
+				setToolbarHeight(newToolbarHeight);
+			}
+
+			const newHeight = container.offsetHeight - newToolbarHeight;
+			const newWidth = container.offsetWidth;
+			if (newWidth !== width || newHeight !== height) {
+				setWidth(newWidth);
+				setHeight(newHeight);
+
+				if (newWidth > 0 && newHeight > 0) {
+					const scale = Math.min(
+						newWidth / VIRTUAL_WIDTH,
+						newHeight / VIRTUAL_HEIGHT
+					);
+					const offsetX = (newWidth - VIRTUAL_WIDTH * scale) / 2;
+					const offsetY = (newHeight - VIRTUAL_HEIGHT * scale) / 2;
+					setViewTransform({ scale, offsetX, offsetY });
 				}
 			}
 		};
 
-		updateCanvasSize(); // Initial size
+		const observer = new ResizeObserver(updateSizes);
+		observer.observe(container);
+		observer.observe(toolbar);
 
-		window.addEventListener("resize", updateCanvasSize);
-		return () => window.removeEventListener("resize", updateCanvasSize);
-	}, [width, height]); // Rerun on size change to handle potential external changes
+		updateSizes(); // Initial call
+		return () => observer.disconnect();
+	}, [width, height, toolbarHeight]); // Dependencies for the effect
 
 	// Load/Save effects
 	useEffect(() => {
@@ -90,7 +117,11 @@ const CanvasWhiteboard: React.FC = () => {
 		setSelectedElements([]);
 	}, [selectedElements]);
 
-	useKeyboard({ onDelete: handleDeleteSelected });
+	useKeyboard({
+		onDelete: handleDeleteSelected,
+		setIsSpacePressed,
+		setIsCtrlPressed,
+	});
 
 	useEffect(() => {
 		if (editingElement) {
@@ -141,13 +172,16 @@ const CanvasWhiteboard: React.FC = () => {
 		setSelectedTool,
 		setEditingElement,
 		setDrawingAngleInfo,
+		viewTransform,
+		setViewTransform,
+		isSpacePressed,
+		isCtrlPressed,
 	});
 
 	// Drawing Hook
 	useDrawing({
 		staticCanvasRef,
 		activeCanvasRef,
-		elementCanvasMap,
 		elements,
 		selectedElements,
 		editingElement,
@@ -155,6 +189,9 @@ const CanvasWhiteboard: React.FC = () => {
 		drawingAngleInfo,
 		width,
 		height,
+		virtualWidth: VIRTUAL_WIDTH,
+		virtualHeight: VIRTUAL_HEIGHT,
+		viewTransform,
 	});
 
 	const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -179,10 +216,14 @@ const CanvasWhiteboard: React.FC = () => {
 	const handleLabelUpdate = () => {
 		if (!editingElement) return;
 
-		const updatedElement =
-			editingElement.type === "text"
-				? { ...editingElement, text: labelText }
-				: { ...editingElement, label: labelText };
+		let updatedElement = { ...editingElement, label: labelText };
+
+		if (editingElement.type === "text") {
+			const textElement = { ...editingElement, text: labelText };
+			// Update dimensions when text changes
+			resizeElement(textElement, "bottom-right", 0, 0);
+			updatedElement = textElement;
+		}
 
 		// If a new text element is created but the text is empty, cancel the creation.
 		if (
@@ -221,91 +262,22 @@ const CanvasWhiteboard: React.FC = () => {
 	const handleClear = () => {
 		setElements([]);
 		setSelectedElements([]);
-		elementCanvasMap.current = new WeakMap();
 	};
 
 	return (
 		<div
 			ref={containerRef}
-			className="app-container font-virgil"
+			className="app-container font-virgil relative"
 			style={{ width: "100%", height: "100%" }}
 		>
-			<div className="toolbar absolute w-100vw z-50">
-				<button
-					className={`toolbar-button ${
-						selectedTool === "selection" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("selection")}
-				>
-					Select
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "rectangle" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("rectangle")}
-				>
-					Rectangle
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "diamond" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("diamond")}
-				>
-					Diamond
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "circle" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("circle")}
-				>
-					Circle
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "arrow" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("arrow")}
-				>
-					Arrow
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "pencil" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("pencil")}
-				>
-					Pencil
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "text" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("text")}
-				>
-					Text
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "line" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("line")}
-				>
-					Line
-				</button>
-				<button
-					className="toolbar-button"
-					onClick={handleDeleteSelected}
-					disabled={selectedElements.length === 0}
-				>
-					Delete Selected
-				</button>
-				<button className="toolbar-button" onClick={handleClear}>
-					Clear
-				</button>
-			</div>
+			<Toolbar
+				ref={toolbarRef}
+				selectedTool={selectedTool}
+				setSelectedTool={setSelectedTool}
+				handleDeleteSelected={handleDeleteSelected}
+				selectedElements={selectedElements}
+				handleClear={handleClear}
+			/>
 
 			{editingElement && editorPosition && (
 				<LabelEditor
@@ -315,8 +287,12 @@ const CanvasWhiteboard: React.FC = () => {
 					onBlur={handleLabelUpdate}
 					onKeyDown={handleLabelKeyDown}
 					style={{
-						top: editorPosition.y,
-						left: editorPosition.x,
+						top:
+							editorPosition.y * viewTransform.scale +
+							viewTransform.offsetY +
+							toolbarHeight,
+						left:
+							editorPosition.x * viewTransform.scale + viewTransform.offsetX,
 					}}
 				/>
 			)}
@@ -327,18 +303,29 @@ const CanvasWhiteboard: React.FC = () => {
 				style={{
 					position: "absolute",
 					left: 0,
-					top: 0,
+					top: `${toolbarHeight}px`,
+					width: `${width}px`,
+					height: `${height}px`,
 					border: "1px solid #ccc",
+					touchAction: "none",
 				}}
 			/>
 			<canvas
 				ref={activeCanvasRef}
 				width={width}
 				height={height}
-				style={{ position: "absolute", left: 0, top: 0, zIndex: 1 }}
+				style={{
+					position: "absolute",
+					left: 0,
+					top: `${toolbarHeight}px`,
+					width: `${width}px`,
+					height: `${height}px`,
+					zIndex: 1,
+					touchAction: "none",
+				}}
 				onPointerDown={handlePointerDown}
 				onPointerMove={handlePointerMove}
-				onPointerUp={handlePointerUp}
+				onPointerUp={(e) => handlePointerUp(e)}
 				onDoubleClick={handleDoubleClick}
 			/>
 		</div>
