@@ -77,7 +77,11 @@ const CanvasWhiteboard: React.FC = () => {
 		if (editingElement) {
 			const center = getElementCenter(editingElement);
 			setEditorPosition({ x: center.x, y: center.y });
-			setLabelText(editingElement.label || "");
+			if (editingElement.type === "text") {
+				setLabelText(editingElement.text);
+			} else {
+				setLabelText(editingElement.label || "");
+			}
 			// Focus after a short delay to allow the textarea to be rendered and positioned
 			setTimeout(() => textAreaRef.current?.focus(), 0);
 		}
@@ -116,6 +120,7 @@ const CanvasWhiteboard: React.FC = () => {
 		updateElements,
 		selectedTool,
 		setSelectedTool,
+		setEditingElement,
 		setDrawingAngleInfo,
 	});
 
@@ -153,7 +158,23 @@ const CanvasWhiteboard: React.FC = () => {
 	const handleLabelUpdate = () => {
 		if (!editingElement) return;
 
-		const updatedElement = { ...editingElement, label: labelText };
+		const updatedElement =
+			editingElement.type === "text"
+				? { ...editingElement, text: labelText }
+				: { ...editingElement, label: labelText };
+
+		// If a new text element is created but the text is empty, cancel the creation.
+		if (
+			updatedElement.type === "text" &&
+			updatedElement.text === "" &&
+			!elements.some((el) => el.id === updatedElement.id)
+		) {
+			setEditingElement(null);
+			setEditorPosition(null);
+			setLabelText("");
+			return;
+		}
+
 		updateElements([updatedElement]);
 		setSelectedElements((prev) =>
 			prev.map((el) => (el.id === updatedElement.id ? updatedElement : el))
@@ -193,6 +214,8 @@ const CanvasWhiteboard: React.FC = () => {
 				<button onClick={() => setSelectedTool("diamond")}>Diamond</button>
 				<button onClick={() => setSelectedTool("circle")}>Circle</button>
 				<button onClick={() => setSelectedTool("arrow")}>Arrow</button>
+				<button onClick={() => setSelectedTool("pencil")}>Pencil</button>
+				<button onClick={() => setSelectedTool("text")}>Text</button>
 				<button onClick={() => setSelectedTool("line")}>Line</button>
 				<button
 					onClick={handleDeleteSelected}

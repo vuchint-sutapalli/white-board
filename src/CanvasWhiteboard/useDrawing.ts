@@ -1,35 +1,84 @@
-import { useLayoutEffect, useCallback } from "react";
+import { useLayoutEffect, useCallback, useRef, useEffect } from "react";
 import type { RefObject } from "react";
-import type { Element, Point, RectangleElement } from "./types";
+import type {
+	Element,
+	Point,
+	RectangleElement,
+	TextElement,
+	PencilElement,
+} from "./types";
 import { HANDLE_SIZE } from "./constants";
 import { getHandles, normalizeRect, getElementCenter } from "./elementUtils";
 
 const drawResizeHandles = (
 	ctx: CanvasRenderingContext2D,
-	el: Element
+	el: Element,
+	copyIcon: HTMLImageElement | null,
+	rotationIcon: HTMLImageElement | null
 ) => {
-	ctx.fillStyle = "blue";
 	const handles = getHandles(el);
 
-	if (el.type === "line" || el.type === "arrow") {
-		handles.forEach((h) => {
+	handles.forEach((h) => {
+		if (h.type === "copy") {
+			if (copyIcon) {
+				const iconSize = 24;
+				ctx.drawImage(
+					copyIcon,
+					h.x - iconSize / 2,
+					h.y - iconSize / 2,
+					iconSize,
+					iconSize
+				);
+			} else {
+				// Fallback to green square if icon isn't loaded yet
+				ctx.fillStyle = "green";
+				ctx.fillRect(
+					h.x - HANDLE_SIZE / 2,
+					h.y - HANDLE_SIZE / 2,
+					HANDLE_SIZE,
+					HANDLE_SIZE
+				);
+			}
+			return;
+		} else if (h.type === "rotation") {
+			if (rotationIcon) {
+				const iconSize = 24;
+				ctx.drawImage(rotationIcon, h.x - iconSize / 2, h.y - iconSize / 2, iconSize, iconSize);
+			} else {
+				// Fallback to green square if icon isn't loaded yet
+				ctx.fillStyle = "green";
+				ctx.fillRect(
+					h.x - HANDLE_SIZE / 2,
+					h.y - HANDLE_SIZE / 2,
+					HANDLE_SIZE,
+					HANDLE_SIZE
+				);
+			}
+			return;
+		} else {
+			ctx.fillStyle = "blue";
+		}
+
+		if (el.type === "line" || el.type === "arrow") {
 			ctx.beginPath();
 			ctx.arc(h.x, h.y, HANDLE_SIZE / 2, 0, 2 * Math.PI);
 			ctx.fill();
-		});
-	} else {
-		handles.forEach((h) =>
+		} else {
 			ctx.fillRect(
 				h.x - HANDLE_SIZE / 2,
 				h.y - HANDLE_SIZE / 2,
 				HANDLE_SIZE,
 				HANDLE_SIZE
-			)
-		);
-	}
+			);
+		}
+	});
 };
 
-const drawLabel = (ctx: CanvasRenderingContext2D, label: string, center: Point) => {
+const drawLabel = (
+	ctx: CanvasRenderingContext2D,
+	label: string,
+	center: Point
+) => {
 	ctx.save();
 	ctx.font = "16px sans-serif";
 	ctx.fillStyle = "black";
@@ -42,33 +91,73 @@ const drawLabel = (ctx: CanvasRenderingContext2D, label: string, center: Point) 
 	ctx.restore();
 };
 
+const drawPencilElement = (
+	ctx: CanvasRenderingContext2D,
+	element: PencilElement
+) => {
+	if (element.points.length === 0) {
+		return;
+	}
+
+	ctx.save();
+	// Inherit strokeStyle from the main drawElement function for highlighting
+	ctx.lineWidth = 2;
+	ctx.lineCap = "round";
+	ctx.lineJoin = "round";
+
+	ctx.beginPath();
+	ctx.moveTo(element.points[0].x, element.points[0].y);
+
+	// Use quadraticCurveTo for a smoother line
+	for (let i = 1; i < element.points.length - 1; i++) {
+		const p1 = element.points[i];
+		const p2 = element.points[i + 1];
+		const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+		ctx.quadraticCurveTo(p1.x, p1.y, midPoint.x, midPoint.y);
+	}
+
+	// Draw the last segment as a straight line
+	if (element.points.length > 1) {
+		const lastPoint = element.points[element.points.length - 1];
+		ctx.lineTo(lastPoint.x, lastPoint.y);
+	}
+
+	ctx.stroke();
+	ctx.restore();
+};
+
 const drawElement = (
 	ctx: CanvasRenderingContext2D,
 	el: Element,
-	highlight = false
+	highlight: boolean,
+	copyIcon: HTMLImageElement | null,
+	rotationIcon: HTMLImageElement | null
 ) => {
 	ctx.save();
+	const center = getElementCenter(el);
+	if (el.rotation && center) {
+		ctx.translate(center.x, center.y);
+		ctx.rotate((el.rotation * Math.PI) / 180);
+		ctx.translate(-center.x, -center.y);
+	}
+
 	ctx.strokeStyle = "black";
 	ctx.lineWidth = 2;
+
+	// Common highlight style
+	if (highlight) {
+		ctx.strokeStyle = "red";
+		ctx.fillStyle = el.type === 'arrow' ? 'red' : ctx.fillStyle;
+		ctx.setLineDash([5, 3]);
+	}
+
 	if (el.type === "rectangle") {
-		ctx.save();
-		if (highlight) {
-			ctx.strokeStyle = "red";
-			ctx.setLineDash([5, 3]);
-		}
 		const { x, y, width, height } = normalizeRect(el);
 		ctx.strokeRect(x, y, width, height);
-		ctx.restore();
-		if (highlight) drawResizeHandles(ctx, el);
 		if (el.label && !highlight) {
 			drawLabel(ctx, el.label, { x: x + width / 2, y: y + height / 2 });
 		}
 	} else if (el.type === "diamond") {
-		ctx.save();
-		if (highlight) {
-			ctx.strokeStyle = "red";
-			ctx.setLineDash([5, 3]);
-		}
 		const { x, y, width, height } = normalizeRect(el);
 		ctx.beginPath();
 		ctx.moveTo(x + width / 2, y);
@@ -77,42 +166,23 @@ const drawElement = (
 		ctx.lineTo(x, y + height / 2);
 		ctx.closePath();
 		ctx.stroke();
-		ctx.restore();
-		if (highlight) drawResizeHandles(ctx, el);
 		if (el.label && !highlight) {
 			drawLabel(ctx, el.label, { x: x + width / 2, y: y + height / 2 });
 		}
 	} else if (el.type === "line") {
-		ctx.save();
-		if (highlight) {
-			ctx.strokeStyle = "red";
-			ctx.setLineDash([5, 3]);
-		}
 		ctx.beginPath();
 		ctx.moveTo(el.x, el.y);
 		ctx.lineTo(el.x2, el.y2);
 		ctx.stroke();
-		ctx.restore();
-		if (highlight) drawResizeHandles(ctx, el);
 		if (el.label && !highlight) {
 			drawLabel(ctx, el.label, getElementCenter(el));
 		}
 	} else if (el.type === "arrow") {
-		ctx.save();
-		if (highlight) {
-			ctx.strokeStyle = "red";
-			ctx.fillStyle = "red";
-			ctx.setLineDash([5, 3]);
-		}
-
 		const angle = Math.atan2(el.y2 - el.y, el.x2 - el.x);
-		// Draw line part
 		ctx.beginPath();
 		ctx.moveTo(el.x, el.y);
 		ctx.lineTo(el.x2, el.y2);
 		ctx.stroke();
-
-		// Draw arrowhead
 		ctx.save();
 		ctx.translate(el.x2, el.y2);
 		ctx.rotate(angle);
@@ -122,30 +192,37 @@ const drawElement = (
 		ctx.lineTo(-10, 5);
 		ctx.closePath();
 		ctx.fill();
-		ctx.restore(); // Restore transform
-
-		ctx.restore(); // Restore styles
-
-		if (highlight) drawResizeHandles(ctx, el);
-
+		ctx.restore();
 		if (el.label && !highlight) {
 			drawLabel(ctx, el.label, getElementCenter(el));
 		}
 	} else if (el.type === "circle") {
-		ctx.save();
-		if (highlight) {
-			ctx.strokeStyle = "red";
-			ctx.setLineDash([5, 3]);
-		}
 		ctx.beginPath();
 		ctx.arc(el.x, el.y, el.radius, 0, 2 * Math.PI);
 		ctx.stroke();
-		ctx.restore();
-		if (highlight) drawResizeHandles(ctx, el);
 		if (el.label && !highlight) {
 			drawLabel(ctx, el.label, { x: el.x, y: el.y });
 		}
+	} else if (el.type === "text") {
+		const textEl = el as TextElement;
+		ctx.font = `${textEl.fontSize}px ${textEl.fontFamily}`;
+		ctx.textBaseline = "top";
+		ctx.fillStyle = highlight ? "red" : "black";
+		textEl.text.split("\n").forEach((line, index) => {
+			ctx.fillText(line, textEl.x, textEl.y + index * textEl.fontSize);
+		});
+	} else if (el.type === "pencil") {
+		if (highlight) {
+			ctx.strokeStyle = "red";
+		}
+		drawPencilElement(ctx, el as PencilElement);
 	}
+
+	// Draw handles if highlighted
+	if (highlight) {
+		drawResizeHandles(ctx, el, copyIcon, rotationIcon);
+	}
+
 	ctx.restore();
 };
 
@@ -219,14 +296,36 @@ export const useDrawing = ({
 	selectionRect,
 	drawingAngleInfo,
 }: UseDrawingProps) => {
-	const createElementSnapshot = useCallback((el: Element) => {
-		const offCanvas = document.createElement("canvas");
-		offCanvas.width = 800;
-		offCanvas.height = 600;
-		const ctx = offCanvas.getContext("2d")!;
-		drawElement(ctx, el);
-		elementCanvasMap.current?.set(el, offCanvas);
-	}, [elementCanvasMap]);
+	const copyIconRef = useRef<HTMLImageElement | null>(null);
+	const rotationIconRef = useRef<HTMLImageElement | null>(null);
+
+	useEffect(() => {
+		const icon = new Image();
+		const copyIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="green" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+		icon.src = `data:image/svg+xml;utf8,${encodeURIComponent(copyIconSvg)}`;
+		icon.onload = () => {
+			copyIconRef.current = icon;
+		};
+
+		const rotIcon = new Image();
+		const rotationIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0000ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6"/><path d="M22 11.5A10 10 0 0 0 3.5 12.5"/><path d="M2 12.5a10 10 0 0 0 18.5-1"/></svg>`;
+		rotIcon.src = `data:image/svg+xml;utf8,${encodeURIComponent(rotationIconSvg)}`;
+		rotIcon.onload = () => {
+			rotationIconRef.current = rotIcon;
+		};
+	}, []);
+
+	const createElementSnapshot = useCallback(
+		(el: Element) => {
+			const offCanvas = document.createElement("canvas");
+			offCanvas.width = 800;
+			offCanvas.height = 600;
+			const ctx = offCanvas.getContext("2d")!;
+			drawElement(ctx, el, false, null, null);
+			elementCanvasMap.current?.set(el, offCanvas);
+		},
+		[elementCanvasMap]
+	);
 
 	useLayoutEffect(() => {
 		const staticCanvas = staticCanvasRef.current;
@@ -257,7 +356,7 @@ export const useDrawing = ({
 
 		selectedElements.forEach((el) => {
 			// Draw the element with its highlight, which won't include the label
-			drawElement(activeCtx, el, true);
+			drawElement(activeCtx, el, true, copyIconRef.current, rotationIconRef.current);
 			// Now, manually draw the label if it exists and is not being edited
 			if (el.label && el.id !== editingElement?.id) {
 				drawLabel(activeCtx, el.label, getElementCenter(el));
@@ -271,5 +370,15 @@ export const useDrawing = ({
 		if (drawingAngleInfo) {
 			drawAngleIndicator(activeCtx, drawingAngleInfo);
 		}
-	}, [elements, selectedElements, editingElement, selectionRect, staticCanvasRef, activeCanvasRef, elementCanvasMap, createElementSnapshot, drawingAngleInfo]);
+	}, [
+		elements,
+		selectedElements,
+		editingElement,
+		selectionRect,
+		staticCanvasRef,
+		activeCanvasRef,
+		elementCanvasMap,
+		createElementSnapshot,
+		drawingAngleInfo,
+	]);
 };
