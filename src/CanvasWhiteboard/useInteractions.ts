@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, RefObject, useRef } from "react";
+import { useState, useCallback, useEffect, RefObject, useRef } from 'react';
 import type {
 	Element,
 	Action,
@@ -8,7 +8,7 @@ import type {
 	RectangleElement,
 	PencilElement,
 } from "./types";
-import type { TextElement } from "./types";
+import type { TextElement } from './types';
 import {
 	hitTestHandle,
 	getElementAtPosition,
@@ -16,9 +16,9 @@ import {
 	resizeElement,
 	getElementCenter,
 	isElementIntersectingRect,
-	simplifyPath,
-} from "./elementUtils";
-import { generateId } from "./utils";
+} from './element';
+import { simplifyPath, normalizeRect, rotatePoint } from './geometry';
+import { generateId } from './id';
 
 interface UseInteractionsProps {
 	activeCanvasRef: RefObject<HTMLCanvasElement>;
@@ -50,7 +50,7 @@ export const useInteractions = ({
 	const [resizeHandle, setResizeHandle] = useState<HandleType | null>(null);
 	const [startPos, setStartPos] = useState<Point>({ x: 0, y: 0 });
 	const [dragOffset, setDragOffset] = useState<Point>({ x: 0, y: 0 });
-	
+
 	const rotationCenterRef = useRef<Point | null>(null);
 	const initialRotationRef = useRef<number>(0);
 
@@ -81,136 +81,103 @@ export const useInteractions = ({
 		[activeCanvasRef]
 	);
 
+	const handleSelectionInteraction = (e: React.PointerEvent<HTMLCanvasElement>, pos: Point) => {
+		// Priority 1: Check for handle interaction on selected elements.
+		if (selectedElements.length > 0) {
+			const activeElement = selectedElements[0];
+			const handle = hitTestHandle(activeElement, pos);
+			if (handle) {
+				if (handle === 'curve') {
+					setAction('curving');
+					return true;
+				}
+				else if (handle === 'rotation') {
+					setAction('rotating');
+					rotationCenterRef.current = getElementCenter(activeElement);
+					initialRotationRef.current = activeElement.rotation || 0;
+					setStartPos(pos);
+					return true;
+				}
+				else if (handle === 'copy') {
+					console.log('user wants to clone this element');
+					const newElement = JSON.parse(JSON.stringify(activeElement));
+					newElement.id = generateId();
+					moveElement(newElement, 15, 15);
+					updateElements([newElement]);
+					setSelectedElements([newElement]);
+					setAction('none');
+					return true;
+				} else {
+					// It's a resize handle.
+					setAction('resizing');
+					setResizeHandle(handle);
+					setStartPos(pos);
+					return true;
+				}
+			}
+		}
+
+		// Priority 2: Check if we are clicking on an element to select or drag it.
+		const elementUnderPointer = getElementAtPosition(elements, pos);
+		if (elementUnderPointer) {
+			setAction('dragging');
+			setDragOffset({ x: pos.x - elementUnderPointer.x, y: pos.y - elementUnderPointer.y });
+			if (!selectedElements.some((el) => el.id === elementUnderPointer.id)) {
+				setSelectedElements([elementUnderPointer]);
+			}
+			return true;
+		}
+
+		// Priority 3: Click on empty space. Deselect or start multi-selection.
+		setAction('multi-selecting');
+		setStartPos(pos);
+		setSelectionRect({
+			id: 'selection',
+			type: 'rectangle',
+			x: pos.x,
+			y: pos.y,
+			width: 0,
+			height: 0,
+		});
+		setSelectedElements([]);
+		return false;
+	};
+
+	const handleDrawingInteraction = (pos: Point) => {
+		if (selectedTool === 'text') {
+			setAction('placing');
+			setStartPos(pos);
+			return;
+		}
+
+		const newEl: Element =
+			selectedTool === 'rectangle'
+				? { id: generateId(), type: 'rectangle', x: pos.x, y: pos.y, width: 0, height: 0 }
+				: selectedTool === 'circle'
+				? { id: generateId(), type: 'circle', x: pos.x, y: pos.y, radius: 0 }
+				: selectedTool === 'diamond'
+				? { id: generateId(), type: 'diamond', x: pos.x, y: pos.y, width: 0, height: 0 }
+				: selectedTool === 'arrow'
+				? { id: generateId(), type: 'arrow', x: pos.x, y: pos.y, x2: pos.x, y2: pos.y }
+				: selectedTool === 'pencil'
+				? { id: generateId(), type: 'pencil', x: pos.x, y: pos.y, points: [{ x: pos.x, y: pos.y }] }
+				: { id: generateId(), type: 'line', x: pos.x, y: pos.y, x2: pos.x, y2: pos.y };
+
+		setSelectedElements([newEl]);
+		setStartPos(pos);
+		setAction('drawing');
+	};
+
 	const handlePointerDown = useCallback(
 		(e: React.PointerEvent<HTMLCanvasElement>) => {
 			const pos = getCanvasPos(e);
 			if (selectedTool === "selection") {
-				// Priority 1: Check for handle interaction on selected elements.
-				// This is because handles can be outside the element's bounding box.
-				if (selectedElements.length > 0) {
-					// For simplicity, we check handles only on the first selected element.
-					const activeElement = selectedElements[0];
-					const handle = hitTestHandle(activeElement, pos);
-					if (handle) {
-						if (handle === "rotation") {
-							setAction("rotating");
-							rotationCenterRef.current = getElementCenter(activeElement);
-							// Capture the starting angle of both the mouse and the object
-							initialRotationRef.current = activeElement.rotation || 0;
-							setStartPos(pos);
-							return;
-						}
-						if (handle === "copy") {
-							console.log("user wants to clone this element");
-							
-							// --- COPY LOGIC ---
-							const newElement = JSON.parse(JSON.stringify(activeElement));
-							newElement.id = generateId();
-							moveElement(newElement, 15, 15);
-	
-							updateElements([newElement]);
-							setSelectedElements([newElement]);
-							setAction("none"); // It's a single-click action
-							return;
-						} else {
-							// It's a resize handle.
-							setAction("resizing");
-							setResizeHandle(handle);
-							setStartPos(pos);
-							// The element is already selected, no need to call setSelectedElements.
-							return;
-						}
-					}
-				}
-
-				// Priority 2: Check if we are clicking on an element to select or drag it.
-				const elementUnderPointer = getElementAtPosition(elements, pos);
-				if (elementUnderPointer) {
-					setAction("dragging");
-					setDragOffset({ x: pos.x - elementUnderPointer.x, y: pos.y - elementUnderPointer.y });
-					if (!selectedElements.some(el => el.id === elementUnderPointer.id)) {
-						setSelectedElements([elementUnderPointer]);
-					}
-				}
-				// Priority 3: Click on empty space. Deselect or start multi-selection.
-				else {
-					setAction("multi-selecting");
-					setStartPos(pos);
-					setSelectionRect({
-						id: "selection",
-						type: "rectangle",
-						x: pos.x,
-						y: pos.y,
-						width: 0,
-						height: 0,
-					});
-					setSelectedElements([]);
-				}
-			} else if (selectedTool === "text") {
-				// For text, we handle creation on pointer up (click)
-				// We set a 'placing' action to distinguish a click from a drag
-				setAction("placing");
-				setStartPos(pos);
-				return;
+				handleSelectionInteraction(e, pos);
 			} else {
-				const newEl: Element =
-					selectedTool === "rectangle"
-						? {
-								id: generateId(),
-								type: "rectangle",
-								x: pos.x,
-								y: pos.y,
-								width: 0,
-								height: 0,
-						  }
-						: selectedTool === "circle"
-						? {
-								id: generateId(),
-								type: "circle",
-								x: pos.x,
-								y: pos.y,
-								radius: 0,
-						  }
-						: selectedTool === "diamond"
-						? {
-								id: generateId(),
-								type: "diamond",
-								x: pos.x,
-								y: pos.y,
-								width: 0,
-								height: 0,
-						  }
-						: selectedTool === "arrow"
-						? {
-								id: generateId(),
-								type: "arrow",
-								x: pos.x,
-								y: pos.y,
-								x2: pos.x,
-								y2: pos.y,
-						  }
-						: selectedTool === "pencil"
-						? {
-								id: generateId(),
-								type: "pencil",
-								x: pos.x,
-								y: pos.y,
-								points: [{ x: pos.x, y: pos.y }],
-						  }
-						: {
-								id: generateId(),
-								type: "line",
-								x: pos.x,
-								y: pos.y,
-								x2: pos.x,
-								y2: pos.y,
-						  };
-				setSelectedElements([newEl]);
-				setStartPos(pos);
-				setAction("drawing");
+				handleDrawingInteraction(pos);
 			}
 		},
-		[getCanvasPos, selectedTool, elements, selectedElements, setSelectedElements, setEditingElement, setDrawingAngleInfo]
+		[getCanvasPos, selectedTool, elements, selectedElements, setSelectedElements, updateElements]
 	);
 
 	const handlePointerMove = useCallback(
@@ -246,6 +213,9 @@ export const useInteractions = ({
 								break;
 							case "rotation":
 								canvas.style.cursor = "crosshair"; // Or a custom rotation cursor
+								break;
+							case "curve":
+								canvas.style.cursor = "move";
 								break;
 							default:
 								canvas.style.cursor = "ew-resize";
@@ -317,6 +287,30 @@ export const useInteractions = ({
 					return newEl;
 				});
 				setSelectedElements(newSelectedElements);
+			} else if (action === 'curving' && selectedElements.length > 0 && startPos) {
+				const activeElement = selectedElements[0];
+				if (activeElement.type === 'line' || activeElement.type === 'arrow') {
+					// Transform the mouse position into the element's local coordinate system
+					// by applying the inverse rotation.
+					const center = getElementCenter(activeElement);
+					const localPos = activeElement.rotation
+						? rotatePoint(pos, center, -activeElement.rotation * (Math.PI / 180))
+						: pos;
+					
+					// The user drags the handle, which should be a point ON the curve.
+					// We'll call this point P_handle (localPos).
+					// The actual Bezier control point (P1) needs to be calculated
+					// such that the curve passes through P_handle at t=0.5.
+					// The formula is: P1 = 2 * P_handle - 0.5 * P0 - 0.5 * P2
+					const p0 = { x: activeElement.x, y: activeElement.y };
+					const p2 = { x: activeElement.x2, y: activeElement.y2 };
+					const cp1x = 2 * localPos.x - 0.5 * p0.x - 0.5 * p2.x;
+					const cp1y = 2 * localPos.y - 0.5 * p0.y - 0.5 * p2.y;
+
+					const curvedEl = { ...activeElement, cp1x, cp1y, curveHandleX: localPos.x, curveHandleY: localPos.y };
+					setSelectedElements([curvedEl]);
+				}
+				return;
 			} else if (action === "rotating" && selectedElements.length > 0 && rotationCenterRef.current) {
 				const center = rotationCenterRef.current;
 				const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
@@ -331,7 +325,7 @@ export const useInteractions = ({
 				const rotatedEl = { ...selectedElements[0], rotation: newRotation };
 				setSelectedElements([rotatedEl]);
 			} else if (action === "resizing" && selectedElements.length > 0 && resizeHandle && startPos) {
-				const activeElement = selectedElements[0];
+				const activeElement = selectedElements[0]!;
 				const dx = pos.x - startPos.x;
 				const dy = pos.y - startPos.y;
 				const resizedEl = { ...activeElement };
@@ -371,7 +365,7 @@ export const useInteractions = ({
 			const selected = elements.filter((el) => isElementIntersectingRect(el, selectionRect));
 			setSelectedElements(selected);
 			setSelectionRect(null);
-		} else if ((action === "drawing" || action === "resizing" || action === "dragging" || action === "rotating") && selectedElements.length > 0) {
+		} else if ((action === 'drawing' || action === 'resizing' || action === 'dragging' || action === 'rotating' || action === 'curving') && selectedElements.length > 0) {
 			const finalElements = selectedElements.map(el => {
 				if (el.type === 'pencil' && el.points.length > 1) {
 					// Simplify the path before storing it to improve performance and reduce storage size.

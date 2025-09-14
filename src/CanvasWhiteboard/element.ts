@@ -1,5 +1,6 @@
 import type {
 	ArrowElement,
+	BaseElement,
 	Element,
 	Point,
 	HandleType,
@@ -10,6 +11,7 @@ import type {
 	TextElement,
 } from "./types";
 import { HANDLE_SIZE, LINE_HIT_THRESHOLD } from "./constants";
+import { normalizeRect, rotatePoint, distanceToLineSegment, getQuadraticCurveBounds, getPointOnQuadraticCurve } from "./geometry";
 
 const COPY_HANDLE_OFFSET = -30; // Negative for above the element
 const ROTATION_HANDLE_OFFSET = -55; // Even further above
@@ -41,8 +43,28 @@ export const getHandles = (
 				{ type: "start", x: lineEl.x, y: lineEl.y },
 				{ type: "end", x: lineEl.x2, y: lineEl.y2 },
 			];
-			lineHandles.push({ type: "copy", x: (lineEl.x + lineEl.x2) / 2, y: (lineEl.y + lineEl.y2) / 2 + COPY_HANDLE_OFFSET });
-			lineHandles.push({ type: "rotation", x: (lineEl.x + lineEl.x2) / 2, y: (lineEl.y + lineEl.y2) / 2 + ROTATION_HANDLE_OFFSET });
+			let handleCenterX: number, handleCenterY: number;
+
+			if (lineEl.cp1x && lineEl.cp1y) {
+				// It's a curved line. Position handles above the curve's bounding box.
+				const bounds = getQuadraticCurveBounds(
+					{ x: lineEl.x, y: lineEl.y }, { x: lineEl.cp1x, y: lineEl.cp1y }, { x: lineEl.x2, y: lineEl.y2 }
+				);
+				handleCenterX = bounds.x + bounds.width / 2;
+				handleCenterY = bounds.y; // Top of the bounding box
+			} else {
+				// It's a straight line. Position handles on the midpoint.
+				handleCenterX = (lineEl.x + lineEl.x2) / 2;
+				handleCenterY = (lineEl.y + lineEl.y2) / 2;
+			}
+			lineHandles.push({ type: "copy", x: handleCenterX, y: handleCenterY + COPY_HANDLE_OFFSET });
+			lineHandles.push({ type: "rotation", x: handleCenterX, y: handleCenterY + ROTATION_HANDLE_OFFSET });
+			if (lineEl.curveHandleX && lineEl.curveHandleY) {
+				lineHandles.push({ type: "curve", x: lineEl.curveHandleX, y: lineEl.curveHandleY });
+			}
+			else {
+				lineHandles.push({ type: "curve", x: (lineEl.x + lineEl.x2) / 2, y: (lineEl.y + lineEl.y2) / 2 });
+			}
 			return lineHandles;
 		}
 		case "text": {
@@ -87,20 +109,6 @@ const measureText = (
 	return { width: Math.max(...widths), height: lines.length * fontSize };
 };
 
-const distanceToLineSegment = (p: Point, a: Point, b: Point): number => {
-	const l2 = (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
-	if (l2 === 0) {
-		return Math.hypot(p.x - a.x, p.y - a.y);
-	}
-	let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
-	t = Math.max(0, Math.min(1, t));
-	const closestPoint = {
-		x: a.x + t * (b.x - a.x),
-		y: a.y + t * (b.y - a.y),
-	};
-	return Math.hypot(p.x - closestPoint.x, p.y - closestPoint.y);
-};
-
 const getPencilElementBounds = (
 	element: PencilElement
 ): { minX: number; minY: number; maxX: number; maxY: number } => {
@@ -118,64 +126,6 @@ const getPencilElementBounds = (
 		maxY = Math.max(maxY, p.y);
 	});
 	return { minX, minY, maxX, maxY };
-};
-
-/**
- * Calculates the perpendicular distance from a point to a line.
- * @param point The point.
- * @param lineStart The start point of the line.
- * @param lineEnd The end point of the line.
- */
-const perpendicularDistanceToLine = (point: Point, lineStart: Point, lineEnd: Point): number => {
-    const { x: x0, y: y0 } = point;
-    const { x: x1, y: y1 } = lineStart;
-    const { x: x2, y: y2 } = lineEnd;
-
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-
-    if (dx === 0 && dy === 0) {
-        return Math.hypot(x0 - x1, y0 - y1);
-    }
-
-    return Math.abs(dy * x0 - dx * y0 + x2 * y1 - y2 * x1) / Math.sqrt(dx * dx + dy * dy);
-};
-
-/**
- * The Ramer-Douglas-Peucker algorithm for path simplification.
- * @param points The array of points to simplify.
- * @param epsilon The tolerance. All points within this distance from the line will be removed.
- */
-const rdp = (points: Point[], epsilon: number): Point[] => {
-    if (points.length < 3) {
-        return points;
-    }
-
-    const firstPoint = points[0];
-    const lastPoint = points[points.length - 1];
-    let index = -1;
-    let maxDist = 0;
-
-    for (let i = 1; i < points.length - 1; i++) {
-        const dist = perpendicularDistanceToLine(points[i], firstPoint, lastPoint);
-        if (dist > maxDist) {
-            maxDist = dist;
-            index = i;
-        }
-    }
-
-    if (maxDist > epsilon) {
-        const left = rdp(points.slice(0, index + 1), epsilon);
-        const right = rdp(points.slice(index), epsilon);
-        // Combine the two simplified paths, removing the duplicate middle point
-        return left.slice(0, left.length - 1).concat(right);
-    } else {
-        return [firstPoint, lastPoint];
-    }
-};
-
-export const simplifyPath = (points: Point[], epsilon = 0.5): Point[] => {
-    return rdp(points, epsilon);
 };
 
 /**
@@ -210,19 +160,6 @@ const roundObject = (obj: any, precision: number): any => {
 	return newObj;
 };
 
- const rotatePoint = (point: Point, origin: Point, angleRad: number): Point => {
-	const cos = Math.cos(angleRad);
-	const sin = Math.sin(angleRad);
-	const translatedX = point.x - origin.x;
-	const translatedY = point.y - origin.y;
-	const rotatedX = translatedX * cos - translatedY * sin;
-	const rotatedY = translatedX * sin + translatedY * cos;
-	return {
-		x: rotatedX + origin.x,
-		y: rotatedY + origin.y,
-	};
-};
-
 export const roundElementProperties = (element: Element, precision: number): Element => {
 	return roundObject(element, precision) as Element;
 };
@@ -243,7 +180,7 @@ export const hitTestHandle = (
 
 	const handles = getHandles(el);
 	for (let h of handles) {
-		const handleSize = h.type === "copy" || h.type === "rotation" ? 24 : HANDLE_SIZE;
+		const handleSize = h.type === "copy" || h.type === "rotation" || h.type === "curve" ? 24 : HANDLE_SIZE;
 		if (Math.abs(localPos.x - h.x) <= handleSize / 2 && Math.abs(localPos.y - h.y) <= handleSize / 2)
 			return h.type;
 	}
@@ -266,30 +203,29 @@ export const getElementAtPosition = (
 			if (localPos.x >= x && localPos.x <= x + width && localPos.y >= y && localPos.y <= y + height) {
 				return el;
 			}
-		} else if (el.type === "line" || el.type === "arrow") {
-			const { x: x1, y: y1, x2, y2 } = el;
-			const { x: px, y: py } = pos;
-
-			// Check for hit on the line segment itself
-			const lenSq = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
-
-			// If the line has no length, it's a point.
-			if (lenSq === 0) {
-				if (Math.hypot(px - x1, py - y1) < LINE_HIT_THRESHOLD) return el;
-			} else {
-				let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / lenSq;
-				t = Math.max(0, Math.min(1, t)); // Clamp t to the [0, 1] range
-
-				const closestX = x1 + t * (x2 - x1);
-				const closestY = y1 + t * (y2 - y1);
-				const dist = Math.hypot(px - closestX, py - closestY);
-
-				if (dist < LINE_HIT_THRESHOLD) return el;
+		} else if (el.type === 'line' || el.type === 'arrow') {
+			let hit = false;
+			if (el.cp1x && el.cp1y) {
+				const p0 = { x: el.x, y: el.y };
+				const p1 = { x: el.cp1x, y: el.cp1y };
+				const p2 = { x: el.x2, y: el.y2 };
+				// A simple hit test: check distance to 10 points on the curve
+				for (let i = 0; i <= 10; i++) {
+					const t = i / 10;
+					const p = getPointOnQuadraticCurve(t, p0, p1, p2);
+					if (Math.hypot(p.x - localPos.x, p.y - localPos.y) < LINE_HIT_THRESHOLD) {
+						hit = true;
+						break;
+					}
+				}
+			} else if (distanceToLineSegment(localPos, { x: el.x, y: el.y }, { x: el.x2, y: el.y2 }) < LINE_HIT_THRESHOLD) {
+				hit = true;
 			}
 
-			// For arrows, also check for a click near the arrowhead
+			if (hit) return el;
+
 			if (el.type === "arrow") {
-				const distToEndpoint = Math.hypot(px - x2, py - y2);
+				const distToEndpoint = Math.hypot(localPos.x - el.x2, localPos.y - el.y2);
 				if (distToEndpoint < 10) return el; // Arrowhead size is roughly 10px
 			}
 		}
@@ -339,23 +275,25 @@ export const moveElement = (el: Element, dx: number, dy: number) => {
 	if (el.type === "rectangle") {
 		el.x += dx;
 		el.y += dy;
-	} else if (el.type === "line") {
+	} else if (el.type === "line" || el.type === "arrow") {
 		el.x += dx;
 		el.y += dy;
 		el.x2 += dx;
 		el.y2 += dy;
+		if (el.cp1x !== undefined && el.cp1y !== undefined) {
+			el.cp1x += dx;
+			el.cp1y += dy;
+		}
+		if (el.curveHandleX !== undefined && el.curveHandleY !== undefined) {
+			el.curveHandleX += dx;
+			el.curveHandleY += dy;
+		}
 	} else if (el.type === "circle") {
 		el.x += dx;
 		el.y += dy;
 	} else if (el.type === "diamond") {
 		el.x += dx;
 		el.y += dy;
-	} else if (el.type === "arrow") {
-		// same as line
-		el.x += dx;
-		el.y += dy;
-		el.x2 += dx;
-		el.y2 += dy;
 	} else if (el.type === "text") {
 		el.x += dx;
 		el.y += dy;
@@ -404,9 +342,13 @@ export const resizeElement = (
 		if (handle === "start") {
 			el.x += dx;
 			el.y += dy;
+			// Reset curve when resizing
+			delete el.cp1x; delete el.cp1y; delete el.curveHandleX; delete el.curveHandleY;
 		} else if (handle === "end") {
 			el.x2 += dx;
 			el.y2 += dy;
+			// Reset curve when resizing
+			delete el.cp1x; delete el.cp1y; delete el.curveHandleX; delete el.curveHandleY;
 		}
 	} else if (el.type === "circle") {
 		if (handle === "radius") {
@@ -422,8 +364,16 @@ export const resizeElement = (
 
 export const getElementCenter = (element: Element): Point => {
 	if (element.type === "rectangle") {
-		const { x, y, width, height } = normalizeRect(element as RectangleElement);
+		const { x, y, width, height } = normalizeRect(element);
 		return { x: x + width / 2, y: y + height / 2 };
+	} else if (element.type === 'line' || element.type === 'arrow') {
+		if (element.cp1x && element.cp1y) {
+			const bounds = getQuadraticCurveBounds(
+				{ x: element.x, y: element.y }, { x: element.cp1x, y: element.cp1y }, { x: element.x2, y: element.y2 }
+			);
+			return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+		}
+		return { x: (element.x + element.x2) / 2, y: (element.y + element.y2) / 2 };
 	} else if (element.type === "line") {
 		return { x: (element.x + element.x2) / 2, y: (element.y + element.y2) / 2 };
 	} else if (element.type === "circle") {
@@ -450,15 +400,6 @@ export const getElementCenter = (element: Element): Point => {
 	}
 	// Fallback for unknown types
 	return { x: element.x, y: element.y };
-};
-
-// New helper to handle rectangles drawn in any direction
-export const normalizeRect = (rect: RectangleElement): RectangleElement => {
-	const x = rect.width < 0 ? rect.x + rect.width : rect.x;
-	const y = rect.height < 0 ? rect.y + rect.height : rect.y;
-	const width = Math.abs(rect.width);
-	const height = Math.abs(rect.height);
-	return { ...rect, x, y, width, height };
 };
 
 export const isElementIntersectingRect = (

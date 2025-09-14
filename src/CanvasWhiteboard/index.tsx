@@ -3,7 +3,12 @@ import type { Element, ElementType } from "./types";
 import { STORAGE_KEY } from "./constants";
 import { useDrawing } from "./useDrawing";
 import { useInteractions } from "./useInteractions";
-import { getElementAtPosition, getElementCenter } from "./elementUtils";
+import { useKeyboard } from "./useKeyboard";
+import {
+	getElementAtPosition,
+	getElementCenter,
+	roundElementProperties,
+} from "./element";
 import { LabelEditor } from "./LabelEditor";
 
 const CanvasWhiteboard: React.FC = () => {
@@ -39,7 +44,13 @@ const CanvasWhiteboard: React.FC = () => {
 
 	// Load/Save effects
 	useEffect(() => {
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(elements));
+		// Round all numeric properties to 2 decimal places before saving.
+		// This keeps the JSON clean and small without sacrificing precision.
+		const precision = 2;
+		const roundedElements = elements.map((el) =>
+			roundElementProperties(el, precision)
+		);
+		localStorage.setItem(STORAGE_KEY, JSON.stringify(roundedElements));
 	}, [elements]);
 
 	const handleDeleteSelected = useCallback(() => {
@@ -49,29 +60,7 @@ const CanvasWhiteboard: React.FC = () => {
 		setSelectedElements([]);
 	}, [selectedElements]);
 
-	// Keyboard events
-	useEffect(() => {
-		const handleKeyDown = (event: KeyboardEvent) => {
-			// Don't delete elements if a text input is focused
-			const target = event.target as HTMLElement;
-			if (
-				target.tagName === "INPUT" ||
-				target.tagName === "TEXTAREA" ||
-				target.isContentEditable
-			) {
-				return;
-			}
-			if (event.key === "Delete" || event.key === "Backspace") {
-				// Prevent browser back navigation on backspace
-				event.preventDefault();
-				handleDeleteSelected();
-			}
-		};
-		window.addEventListener("keydown", handleKeyDown);
-		return () => {
-			window.removeEventListener("keydown", handleKeyDown);
-		};
-	}, [handleDeleteSelected]);
+	useKeyboard({ onDelete: handleDeleteSelected });
 
 	useEffect(() => {
 		if (editingElement) {

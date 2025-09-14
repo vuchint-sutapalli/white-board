@@ -18,6 +18,10 @@ export interface LineElement extends BaseElement {
 	type: "line";
 	x2: number;
 	y2: number;
+	cp1x?: number;
+	cp1y?: number;
+	curveHandleX?: number;
+	curveHandleY?: number;
 	points?: number[];
 }
 
@@ -68,9 +72,10 @@ export type HandleType =
 	| "radius"
 	| "pencil"
 	| "copy"
-	| "rotation";
+	| "rotation"
+	| "curve";
 
-export type Action = "none" | "drawing" | "dragging" | "resizing" | "multi-selecting" | "placing";
+export type Action = "none" | "drawing" | "dragging" | "resizing" | "multi-selecting" | "placing" | "rotating" | "curving";
 
 export interface Point {
 	x: number;

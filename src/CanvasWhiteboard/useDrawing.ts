@@ -8,7 +8,8 @@ import type {
 	PencilElement,
 } from "./types";
 import { HANDLE_SIZE } from "./constants";
-import { getHandles, normalizeRect, getElementCenter } from "./elementUtils";
+import { getHandles, getElementCenter } from './element';
+import { normalizeRect } from './geometry';
 
 const drawResizeHandles = (
 	ctx: CanvasRenderingContext2D,
@@ -55,11 +56,13 @@ const drawResizeHandles = (
 				);
 			}
 			return;
+		} else if (h.type === "curve") {
+			ctx.fillStyle = "orange";
 		} else {
 			ctx.fillStyle = "blue";
 		}
 
-		if (el.type === "line" || el.type === "arrow") {
+		if (el.type === "line" || el.type === "arrow" || h.type === "curve") {
 			ctx.beginPath();
 			ctx.arc(h.x, h.y, HANDLE_SIZE / 2, 0, 2 * Math.PI);
 			ctx.fill();
@@ -151,7 +154,7 @@ const drawElement = (
 		ctx.setLineDash([5, 3]);
 	}
 
-	if (el.type === "rectangle") {
+	if (el.type === 'rectangle') {
 		const { x, y, width, height } = normalizeRect(el);
 		ctx.strokeRect(x, y, width, height);
 		if (el.label && !highlight) {
@@ -169,23 +172,40 @@ const drawElement = (
 		if (el.label && !highlight) {
 			drawLabel(ctx, el.label, { x: x + width / 2, y: y + height / 2 });
 		}
-	} else if (el.type === "line") {
+	} else if (el.type === 'line') {
 		ctx.beginPath();
 		ctx.moveTo(el.x, el.y);
-		ctx.lineTo(el.x2, el.y2);
+		if (el.cp1x && el.cp1y) {
+			ctx.quadraticCurveTo(el.cp1x, el.cp1y, el.x2, el.y2);
+		} else {
+			ctx.lineTo(el.x2, el.y2);
+		}
 		ctx.stroke();
 		if (el.label && !highlight) {
 			drawLabel(ctx, el.label, getElementCenter(el));
 		}
 	} else if (el.type === "arrow") {
-		const angle = Math.atan2(el.y2 - el.y, el.x2 - el.x);
+		let arrowAngle;
+		if (el.cp1x && el.cp1y) {
+			// The tangent of a quadratic bezier at t=1 is the line from the control point to the end point.
+			arrowAngle = Math.atan2(el.y2 - el.cp1y, el.x2 - el.cp1x);
+		} else {
+			arrowAngle = Math.atan2(el.y2 - el.y, el.x2 - el.x);
+		}
+
 		ctx.beginPath();
 		ctx.moveTo(el.x, el.y);
-		ctx.lineTo(el.x2, el.y2);
+		if (el.cp1x && el.cp1y) {
+			ctx.quadraticCurveTo(el.cp1x, el.cp1y, el.x2, el.y2);
+		} else {
+			ctx.lineTo(el.x2, el.y2);
+		}
 		ctx.stroke();
+
+		// Draw arrowhead
 		ctx.save();
 		ctx.translate(el.x2, el.y2);
-		ctx.rotate(angle);
+		ctx.rotate(arrowAngle);
 		ctx.beginPath();
 		ctx.moveTo(0, 0);
 		ctx.lineTo(-10, -5);
