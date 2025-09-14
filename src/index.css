@@ -72,3 +72,12 @@ body,
   background: #007bff;
   color: white;
 }
+
+.toolbar-button.toolbar-button-danger {
+  background-color: #dc3545;
+  color: white;
+}
+
+.toolbar-button.toolbar-button-danger:hover {
+  background-color: #c82333;
+}

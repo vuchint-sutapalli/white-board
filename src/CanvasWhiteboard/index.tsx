@@ -19,25 +19,34 @@ import {
 import { LabelEditor } from "./LabelEditor";
 import { Toolbar } from "./Toolbar";
 
+// Defines the virtual canvas dimensions. All element coordinates are relative to this size.
+// This allows the canvas to be responsive while maintaining a consistent coordinate system.
 const VIRTUAL_WIDTH = 1280;
 const VIRTUAL_HEIGHT = 720;
 
 const CanvasWhiteboard: React.FC = () => {
+	// Refs for DOM elements
 	const containerRef = useRef<HTMLDivElement>(null);
 	const toolbarRef = useRef<HTMLDivElement>(null);
-	const staticCanvasRef = useRef<HTMLCanvasElement>(null);
-	const activeCanvasRef = useRef<HTMLCanvasElement>(null);
-	const textAreaRef = useRef<HTMLTextAreaElement>(null);
+	const staticCanvasRef = useRef<HTMLCanvasElement>(null); // Bottom canvas for static elements
+	const activeCanvasRef = useRef<HTMLCanvasElement>(null); // Top canvas for active/interactive elements
+	const textAreaRef = useRef<HTMLTextAreaElement>(null); // Text area for editing labels/text
 
+	// State for canvas dimensions and layout
 	const [width, setWidth] = useState(0);
 	const [height, setHeight] = useState(0);
 	const [toolbarHeight, setToolbarHeight] = useState(0);
+
+	// Viewport state for panning and zooming
 	const [viewTransform, setViewTransform] = useState({
-		scale: 1,
-		offsetX: 0,
-		offsetY: 0,
+		scale: 1, // Zoom level
+		offsetX: 0, // Horizontal pan
+		offsetY: 0, // Vertical pan
 	});
+
+	// Core application state
 	const [elements, setElements] = useState<Element[]>(() => {
+		// Load elements from localStorage on initial render
 		try {
 			const saved = localStorage.getItem(STORAGE_KEY);
 			return saved ? JSON.parse(saved) : [];
@@ -49,36 +58,47 @@ const CanvasWhiteboard: React.FC = () => {
 	const [selectedTool, setSelectedTool] = useState<ElementType>("selection");
 	const [selectedElements, setSelectedElements] = useState<Element[]>([]);
 	const [editingElement, setEditingElement] = useState<Element | null>(null);
+
+	// State for the label/text editor
 	const [labelText, setLabelText] = useState("");
 	const [editorPosition, setEditorPosition] = useState<{
 		x: number;
 		y: number;
 	} | null>(null);
+
+	// State for displaying angle information during rotation/drawing
 	const [drawingAngleInfo, setDrawingAngleInfo] = useState<{
 		angle: number;
 		x: number;
 		y: number;
 	} | null>(null);
+
+	// State for keyboard modifiers (for panning)
 	const [isSpacePressed, setIsSpacePressed] = useState(false);
 	const [isCtrlPressed, setIsCtrlPressed] = useState(false);
 
+	// Effect to handle responsive canvas resizing
 	useLayoutEffect(() => {
 		const container = containerRef.current;
 		const toolbar = toolbarRef.current;
 		if (!container || !toolbar) return;
 
+		// Use ResizeObserver to efficiently detect size changes of the container and toolbar
 		const updateSizes = () => {
 			const newToolbarHeight = toolbar.offsetHeight;
 			if (newToolbarHeight !== toolbarHeight) {
 				setToolbarHeight(newToolbarHeight);
 			}
 
+			// Calculate canvas size based on container and toolbar height
 			const newHeight = container.offsetHeight - newToolbarHeight;
 			const newWidth = container.offsetWidth;
 			if (newWidth !== width || newHeight !== height) {
 				setWidth(newWidth);
 				setHeight(newHeight);
 
+				// When size changes, recalculate the view transform to fit the virtual canvas
+				// within the new dimensions, centered.
 				if (newWidth > 0 && newHeight > 0) {
 					const scale = Math.min(
 						newWidth / VIRTUAL_WIDTH,
@@ -99,7 +119,7 @@ const CanvasWhiteboard: React.FC = () => {
 		return () => observer.disconnect();
 	}, [width, height, toolbarHeight]); // Dependencies for the effect
 
-	// Load/Save effects
+	// Effect to save elements to localStorage whenever they change
 	useEffect(() => {
 		// Round all numeric properties to 2 decimal places before saving.
 		// This keeps the JSON clean and small without sacrificing precision.
@@ -110,6 +130,7 @@ const CanvasWhiteboard: React.FC = () => {
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(roundedElements));
 	}, [elements]);
 
+	// Callback to delete selected elements
 	const handleDeleteSelected = useCallback(() => {
 		if (selectedElements.length === 0) return;
 		const selectedIds = new Set(selectedElements.map((el) => el.id));
@@ -117,12 +138,14 @@ const CanvasWhiteboard: React.FC = () => {
 		setSelectedElements([]);
 	}, [selectedElements]);
 
+	// Hook to handle keyboard shortcuts (delete, pan keys)
 	useKeyboard({
 		onDelete: handleDeleteSelected,
 		setIsSpacePressed,
 		setIsCtrlPressed,
 	});
 
+	// Effect to manage the label editor's state and position
 	useEffect(() => {
 		if (editingElement) {
 			const center = getElementCenter(editingElement);
@@ -137,17 +160,23 @@ const CanvasWhiteboard: React.FC = () => {
 		}
 	}, [editingElement]);
 
+	/**
+	 * A robust way to update elements in the state.
+	 * It handles both creating new elements and updating existing ones.
+	 * @param updatedElements An array of elements that have been created or modified.
+	 */
 	const updateElements = useCallback((updatedElements: Element[]) => {
 		const updatedElementsMap = new Map(
 			updatedElements.map((el) => [el.id, el])
 		);
 
-		// This handles both updates and creations
+		// This handles both updates and creations in a single pass
 		setElements((prevElements) => {
 			const newElements = prevElements.map(
 				(el) => updatedElementsMap.get(el.id) || el
 			);
 			const newIds = new Set(newElements.map((el) => el.id));
+			// Add any new elements that weren't in the previous state
 			updatedElements.forEach((updatedEl) => {
 				if (!newIds.has(updatedEl.id)) {
 					newElements.push(updatedEl);
@@ -157,6 +186,7 @@ const CanvasWhiteboard: React.FC = () => {
 		});
 	}, []);
 
+	// Hook for handling all user interactions (drawing, selecting, moving, etc.)
 	const {
 		selectionRect,
 		handlePointerDown,
@@ -178,7 +208,7 @@ const CanvasWhiteboard: React.FC = () => {
 		isCtrlPressed,
 	});
 
-	// Drawing Hook
+	// Hook for handling the rendering of both static and active canvases
 	useDrawing({
 		staticCanvasRef,
 		activeCanvasRef,
@@ -194,25 +224,33 @@ const CanvasWhiteboard: React.FC = () => {
 		viewTransform,
 	});
 
+	// Handler for double-click events to start editing an element's label/text
 	const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
 		// This is a native event, not a React PointerEvent
 		const canvas = activeCanvasRef.current;
 		if (!canvas) return;
 		const rect = canvas.getBoundingClientRect();
-		const pos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+		// We need to calculate the world coordinates from the screen click
+		const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+		const worldPos = {
+			x: (screenPos.x - viewTransform.offsetX) / viewTransform.scale,
+			y: (screenPos.y - viewTransform.offsetY) / viewTransform.scale,
+		};
 
-		const element = getElementAtPosition(elements, pos);
+		const element = getElementAtPosition(elements, worldPos);
 		if (element) {
 			setEditingElement(element);
-			// deselect other elements
+			// Select only the double-clicked element
 			setSelectedElements([element]);
 		}
 	};
 
+	// Handler for changes in the label editor textarea
 	const handleLabelChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
 		setLabelText(e.target.value);
 	};
 
+	// Handler for when the label editor loses focus (onBlur)
 	const handleLabelUpdate = () => {
 		if (!editingElement) return;
 
@@ -238,6 +276,7 @@ const CanvasWhiteboard: React.FC = () => {
 		}
 
 		updateElements([updatedElement]);
+		// Also update the element within the `selectedElements` array to ensure consistency
 		setSelectedElements((prev) =>
 			prev.map((el) => (el.id === updatedElement.id ? updatedElement : el))
 		);
@@ -246,6 +285,7 @@ const CanvasWhiteboard: React.FC = () => {
 		setLabelText("");
 	};
 
+	// Handler for keyboard events within the label editor
 	const handleLabelKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault(); // Prevent new line
@@ -259,6 +299,7 @@ const CanvasWhiteboard: React.FC = () => {
 		}
 	};
 
+	// Handler for the "Clear" button in the toolbar
 	const handleClear = () => {
 		setElements([]);
 		setSelectedElements([]);
@@ -279,6 +320,7 @@ const CanvasWhiteboard: React.FC = () => {
 				handleClear={handleClear}
 			/>
 
+			{/* Render the label editor when an element is being edited */}
 			{editingElement && editorPosition && (
 				<LabelEditor
 					ref={textAreaRef}
@@ -287,6 +329,7 @@ const CanvasWhiteboard: React.FC = () => {
 					onBlur={handleLabelUpdate}
 					onKeyDown={handleLabelKeyDown}
 					style={{
+						// Position the editor in screen space based on the element's world coordinates
 						top:
 							editorPosition.y * viewTransform.scale +
 							viewTransform.offsetY +
@@ -296,6 +339,7 @@ const CanvasWhiteboard: React.FC = () => {
 					}}
 				/>
 			)}
+			{/* The static canvas (bottom layer) for drawing non-interactive elements */}
 			<canvas
 				ref={staticCanvasRef}
 				width={width}
@@ -307,9 +351,10 @@ const CanvasWhiteboard: React.FC = () => {
 					width: `${width}px`,
 					height: `${height}px`,
 					border: "1px solid #ccc",
-					touchAction: "none",
+					touchAction: "none", // Disable default touch actions like scroll/zoom
 				}}
 			/>
+			{/* The active canvas (top layer) for drawing interactive elements and handling pointer events */}
 			<canvas
 				ref={activeCanvasRef}
 				width={width}
@@ -321,7 +366,7 @@ const CanvasWhiteboard: React.FC = () => {
 					width: `${width}px`,
 					height: `${height}px`,
 					zIndex: 1,
-					touchAction: "none",
+					touchAction: "none", // Disable default touch actions like scroll/zoom
 				}}
 				onPointerDown={handlePointerDown}
 				onPointerMove={handlePointerMove}

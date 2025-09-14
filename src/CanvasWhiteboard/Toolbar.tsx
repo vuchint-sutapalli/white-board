@@ -1,4 +1,4 @@
-import React, { forwardRef } from "react";
+import React, { forwardRef, useState } from "react";
 import type { Element, ElementType } from "./types";
 
 interface ToolbarProps {
@@ -31,6 +31,9 @@ export const Toolbar = forwardRef<HTMLDivElement, ToolbarProps>(
 		},
 		ref
 	) => {
+		// State to manage the confirmation step for clearing the canvas.
+		const [isConfirmingClear, setIsConfirmingClear] = useState(false);
+
 		return (
 			<div
 				ref={ref}
@@ -54,9 +57,35 @@ export const Toolbar = forwardRef<HTMLDivElement, ToolbarProps>(
 				>
 					Delete Selected
 				</button>
-				<button className="toolbar-button" onClick={handleClear}>
-					Clear
-				</button>
+				{isConfirmingClear ? (
+					<div className="flex items-center gap-2 p-1 border border-gray-300 rounded-md bg-gray-50">
+						<span className="text-sm text-gray-600 mr-1 ml-2">
+							Are you sure?
+						</span>
+						<button
+							className="toolbar-button"
+							onClick={() => setIsConfirmingClear(false)}
+						>
+							Cancel
+						</button>
+						<button
+							className="toolbar-button toolbar-button-danger"
+							onClick={() => {
+								handleClear();
+								setIsConfirmingClear(false);
+							}}
+						>
+							Confirm
+						</button>
+					</div>
+				) : (
+					<button
+						className="toolbar-button"
+						onClick={() => setIsConfirmingClear(true)}
+					>
+						Clear
+					</button>
+				)}
 			</div>
 		);
 	}

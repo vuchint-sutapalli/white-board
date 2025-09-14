@@ -20,6 +20,9 @@ import {
 import { simplifyPath, normalizeRect, rotatePoint } from './geometry';
 import { generateId } from './id';
 
+/**
+ * Props for the useInteractions hook.
+ */
 interface UseInteractionsProps {
 	activeCanvasRef: RefObject<HTMLCanvasElement>;
 	elements: Element[];
@@ -36,6 +39,11 @@ interface UseInteractionsProps {
 	isCtrlPressed: boolean;
 }
 
+/**
+ * A comprehensive hook to manage all user interactions on the canvas.
+ * This includes drawing, selecting, moving, resizing, rotating, curving, and panning.
+ * It functions as a state machine, transitioning between different `Action` states.
+ */
 export const useInteractions = ({
 	activeCanvasRef,
 	elements,
@@ -51,27 +59,34 @@ export const useInteractions = ({
 	isSpacePressed,
 	isCtrlPressed,
 }: UseInteractionsProps) => {
+	// The `action` state determines the current user interaction mode.
 	const [action, setAction] = useState<Action>("none");
+
+	// State for multi-selection rectangle.
 	const [selectionRect, setSelectionRect] = useState<RectangleElement | null>(
 		null
 	);
+
+	// State for element transformations.
 	const [resizeHandle, setResizeHandle] = useState<HandleType | null>(null);
 	const [startPos, setStartPos] = useState<Point>({ x: 0, y: 0 });
 	const [dragOffset, setDragOffset] = useState<Point>({ x: 0, y: 0 });
-	const activePointers = useRef<Map<number, Point>>(new Map());
+
+	// Refs for managing complex interactions like panning and rotation.
+	const activePointers = useRef<Map<number, Point>>(new Map()); // Tracks active pointers for multi-touch gestures.
 	const panStartRef = useRef<{
 		point: Point;
 		viewTransform: { offsetX: number; offsetY: number };
 	}>({ point: { x: 0, y: 0 }, viewTransform: { offsetX: 0, offsetY: 0 } });
-
 	const rotationCenterRef = useRef<Point | null>(null);
 	const initialRotationRef = useRef<number>(0);
 
-	// Cursor effect
+	// Effect to update the cursor style based on the current tool and interaction.
 	useEffect(() => {
 		const canvas = activeCanvasRef.current;
 		if (!canvas) return;
 
+		// Panning cursor takes precedence.
 		if (isSpacePressed || isCtrlPressed) {
 			canvas.style.cursor = 'grab';
 			return;
@@ -96,6 +111,10 @@ export const useInteractions = ({
 		}
 	}, [selectedTool, activeCanvasRef, isSpacePressed, isCtrlPressed]);
 
+	/**
+	 * Converts pointer event coordinates from screen space to canvas "world" space.
+	 * This accounts for the current pan and zoom level.
+	 */
 	const getCanvasPos = useCallback(
 		(event: React.PointerEvent<HTMLCanvasElement>) => {
 			const canvas = activeCanvasRef.current!;
@@ -110,6 +129,10 @@ export const useInteractions = ({
 		[activeCanvasRef, viewTransform]
 	);
 
+	/**
+	 * Converts pointer event coordinates to screen space, relative to the canvas element.
+	 * This is used for interactions that don't depend on zoom/pan, like panning itself.
+	 */
 	const getScreenPos = useCallback(
 		(event: React.PointerEvent<HTMLCanvasElement>) => {
 			const canvas = activeCanvasRef.current!;
@@ -119,9 +142,16 @@ export const useInteractions = ({
 		[activeCanvasRef]
 	);
 
+	/**
+	 * Handles interactions when the "selection" tool is active.
+	 * This function determines whether to start a resize, drag, rotation, or multi-selection.
+	 * The order of checks is important to prioritize handle interactions over general element clicks.
+	 */
 	const handleSelectionInteraction = (e: React.PointerEvent<HTMLCanvasElement>, pos: Point) => {
 		// Priority 1: Check for handle interaction on selected elements.
 		if (selectedElements.length > 0) {
+			// For simplicity, we only check handles on the first selected element.
+			// Multi-element transforms could be implemented here in the future.
 			const activeElement = selectedElements[0];
 			const handle = hitTestHandle(activeElement, pos);
 			if (handle) {
@@ -137,13 +167,14 @@ export const useInteractions = ({
 					return true;
 				}
 				else if (handle === 'copy') {
+					// Clone the element and offset it slightly.
 					console.log('user wants to clone this element');
 					const newElement = JSON.parse(JSON.stringify(activeElement));
 					newElement.id = generateId();
 					moveElement(newElement, 15, 15);
 					updateElements([newElement]);
 					setSelectedElements([newElement]);
-					setAction('none');
+					setAction('none'); // It's a one-off action.
 					return true;
 				} else {
 					// It's a resize handle.
@@ -160,13 +191,14 @@ export const useInteractions = ({
 		if (elementUnderPointer) {
 			setAction('dragging');
 			setDragOffset({ x: pos.x - elementUnderPointer.x, y: pos.y - elementUnderPointer.y });
+			// If the clicked element is not already selected, select it.
 			if (!selectedElements.some((el) => el.id === elementUnderPointer.id)) {
 				setSelectedElements([elementUnderPointer]);
 			}
 			return true;
 		}
 
-		// Priority 3: Click on empty space. Deselect or start multi-selection.
+		// Priority 3: Click on empty space. Start multi-selection.
 		setAction('multi-selecting');
 		setStartPos(pos);
 		setSelectionRect({
@@ -177,17 +209,22 @@ export const useInteractions = ({
 			width: 0,
 			height: 0,
 		});
-		setSelectedElements([]);
+		setSelectedElements([]); // Deselect any previously selected elements.
 		return false;
 	};
 
+	/**
+	 * Handles interactions when a drawing tool (rectangle, line, etc.) is active.
+	 */
 	const handleDrawingInteraction = (pos: Point) => {
+		// For text, we just mark the position and wait for pointerUp.
 		if (selectedTool === 'text') {
 			setAction('placing');
 			setStartPos(pos);
 			return;
 		}
 
+		// For other shapes, create a new element and set the action to 'drawing'.
 		const newEl: Element =
 			selectedTool === 'rectangle'
 				? { id: generateId(), type: 'rectangle', x: pos.x, y: pos.y, width: 0, height: 0 }
@@ -206,18 +243,24 @@ export const useInteractions = ({
 		setAction('drawing');
 	};
 
+	/**
+	 * The main entry point for pointer down events.
+	 * This function orchestrates the start of any interaction.
+	 */
 	const handlePointerDown = useCallback(
 		(e: React.PointerEvent<HTMLCanvasElement>) => {
 			activePointers.current.set(e.pointerId, getScreenPos(e));
 
-			// Panning takes precedence
+			// Panning takes precedence over all other actions.
+			// It can be triggered by middle mouse, spacebar, ctrl key, or two-finger touch.
 			if (e.button === 1 || isSpacePressed || isCtrlPressed || activePointers.current.size > 1) {
-				// if we are drawing, we want to stop that.
+				// if we are drawing, we want to cancel it and switch to panning.
 				if (action === 'drawing' && selectedElements.length > 0) {
 					const newElements = elements.filter(el => el.id !== selectedElements[0].id);
 					updateElements(newElements);
 					setSelectedElements([]);
 				}
+
 				// for two-finger panning, we need to recalculate the pan start point
 				// to be the center of the two fingers.
 				if (action !== 'panning' && activePointers.current.size > 1) {
@@ -240,6 +283,7 @@ export const useInteractions = ({
 					},
 				};
 
+				// If it's a two-finger pan, use the midpoint.
 				if (activePointers.current.size > 1) {
 					const pointers = Array.from(activePointers.current.values());
 					panStartRef.current.point = {
@@ -251,6 +295,7 @@ export const useInteractions = ({
 				return;
 			}
 
+			// If not panning, determine the action based on the selected tool.
 			const pos = getCanvasPos(e);
 			if (selectedTool === "selection") {
 				handleSelectionInteraction(e, pos);
@@ -261,17 +306,24 @@ export const useInteractions = ({
 		[getCanvasPos, getScreenPos, selectedTool, elements, selectedElements, setSelectedElements, updateElements, isSpacePressed, isCtrlPressed, viewTransform.offsetX, viewTransform.offsetY, action]
 	);
 
+	/**
+	 * The main handler for pointer move events.
+	 * This function executes the logic for the current `action`.
+	 */
 	const handlePointerMove = useCallback(
 		(e: React.PointerEvent<HTMLCanvasElement>) => {
+			// Update pointer position for multi-touch gestures.
 			if (activePointers.current.has(e.pointerId)) {
 				activePointers.current.set(e.pointerId, getScreenPos(e));
 			}
 
 			const canvas = activeCanvasRef.current!;
+			// --- Panning Logic ---
 			if (action === 'panning') {
 				canvas.style.cursor = 'grabbing';
 				let currentScreenPos = getScreenPos(e);
 
+				// For two-finger panning, use the midpoint of the pointers.
 				if (activePointers.current.size > 1) {
 					const pointers = Array.from(activePointers.current.values());
 					currentScreenPos = {
@@ -292,14 +344,17 @@ export const useInteractions = ({
 
 			const pos = getCanvasPos(e);
 
+			// --- Placing Text Logic ---
 			if (action === "placing") {
 				const distance = Math.hypot(pos.x - startPos.x, pos.y - startPos.y);
 				if (distance > 5) {
-					// if user drags more than 5px, cancel placing
+					// if user drags more than 5px, cancel placing and switch to drawing a text box.
+					// This is a potential future feature. For now, it just cancels.
 					setAction("none");
 				}
 				return;
 			}
+			// --- Hover Logic (when no action is active) ---
 			if (action === "none" && selectedTool === "selection") {
 				if (isSpacePressed || isCtrlPressed) {
 					canvas.style.cursor = 'grab';
@@ -308,6 +363,7 @@ export const useInteractions = ({
 				const el = getElementAtPosition(elements, pos);
 				if (el) {
 					const handle = hitTestHandle(el, pos);
+					// Set cursor based on the handle type.
 					if (handle) {
 						switch (handle) {
 							case "top-left":
@@ -335,13 +391,12 @@ export const useInteractions = ({
 					} else {
 						canvas.style.cursor = "move";
 					}
-				} else if (el) {
-					canvas.style.cursor = "move";
 				} else {
 					canvas.style.cursor = "default";
 				}
 			}
 
+			// --- Multi-selecting Logic ---
 			if (action === "multi-selecting" && selectionRect) {
 				setSelectionRect({
 					...selectionRect,
@@ -351,14 +406,15 @@ export const useInteractions = ({
 				return;
 			}
 
+			// --- Drawing Logic ---
 			if (action === "drawing" && selectedElements.length > 0 && startPos) {
 				const updatedEl = { ...selectedElements[0] };
-				if (updatedEl.type === "rectangle") {
+				// Update the element's properties based on its type.
+				if (updatedEl.type === "rectangle" || updatedEl.type === "diamond") {
 					updatedEl.width = pos.x - startPos.x;
 					updatedEl.height = pos.y - startPos.y;
 					setDrawingAngleInfo(null);
 				} else if (updatedEl.type === "pencil") {
-					// Create a new points array to ensure React detects the change
 					(updatedEl as PencilElement).points = [
 						...(updatedEl as PencilElement).points,
 						{ x: pos.x, y: pos.y },
@@ -379,15 +435,11 @@ export const useInteractions = ({
 				} else if (updatedEl.type === "circle") {
 					updatedEl.radius = Math.hypot(pos.x - startPos.x, pos.y - startPos.y);
 					setDrawingAngleInfo(null);
-				} else if (updatedEl.type === "diamond") {
-					updatedEl.width = pos.x - startPos.x;
-					updatedEl.height = pos.y - startPos.y;
-					setDrawingAngleInfo(null);
 				}
 				setSelectedElements([updatedEl]);
-			} else if (action === "dragging" && selectedElements.length > 0 && dragOffset) {
-				// The element we clicked on to start the drag is the one that should follow the cursor.
-				// It might not be the first in the array if we shift-clicked to select.
+			} 
+			// --- Dragging Logic ---
+			else if (action === "dragging" && selectedElements.length > 0 && dragOffset) {
 				const leadElement =
 					getElementAtPosition(selectedElements, startPos) || selectedElements[0];
 				const dx = pos.x - dragOffset.x - leadElement.x;
@@ -398,7 +450,9 @@ export const useInteractions = ({
 					return newEl;
 				});
 				setSelectedElements(newSelectedElements);
-			} else if (action === 'curving' && selectedElements.length > 0 && startPos) {
+			} 
+			// --- Curving Logic ---
+			else if (action === 'curving' && selectedElements.length > 0 && startPos) {
 				const activeElement = selectedElements[0];
 				if (activeElement.type === 'line' || activeElement.type === 'arrow') {
 					// Transform the mouse position into the element's local coordinate system
@@ -422,7 +476,9 @@ export const useInteractions = ({
 					setSelectedElements([curvedEl]);
 				}
 				return;
-			} else if (action === "rotating" && selectedElements.length > 0 && rotationCenterRef.current) {
+			} 
+			// --- Rotating Logic ---
+			else if (action === "rotating" && selectedElements.length > 0 && rotationCenterRef.current) {
 				const center = rotationCenterRef.current;
 				const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
 				const startAngle = Math.atan2(startVector.y, startVector.x);
@@ -435,7 +491,9 @@ export const useInteractions = ({
 
 				const rotatedEl = { ...selectedElements[0], rotation: newRotation };
 				setSelectedElements([rotatedEl]);
-			} else if (action === "resizing" && selectedElements.length > 0 && resizeHandle && startPos) {
+			} 
+			// --- Resizing Logic ---
+			else if (action === "resizing" && selectedElements.length > 0 && resizeHandle && startPos) {
 				const activeElement = selectedElements[0]!;
 				const dx = pos.x - startPos.x;
 				const dy = pos.y - startPos.y;
@@ -459,6 +517,10 @@ export const useInteractions = ({
 		[action, getCanvasPos, getScreenPos, selectedTool, selectedElements, startPos, dragOffset, resizeHandle, elements, selectionRect, activeCanvasRef, setSelectedElements, setDrawingAngleInfo, isSpacePressed, isCtrlPressed, setViewTransform, viewTransform]
 	);
 
+	/**
+	 * The main handler for pointer up events.
+	 * This function finalizes the current interaction.
+	 */
 	const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
 		activePointers.current.delete(e.pointerId);
 		const canvas = activeCanvasRef.current;
@@ -486,10 +548,12 @@ export const useInteractions = ({
 			setEditingElement(newEl);
 			// We don't call updateElements yet, that will happen in handleLabelUpdate
 		} else if (action === "multi-selecting" && selectionRect) {
+			// Finalize multi-selection
 			const selected = elements.filter((el) => isElementIntersectingRect(el, selectionRect));
 			setSelectedElements(selected);
 			setSelectionRect(null);
 		} else if ((action === 'drawing' || action === 'resizing' || action === 'dragging' || action === 'rotating' || action === 'curving') && selectedElements.length > 0) {
+			// Finalize any element transformation or creation.
 			const finalElements = selectedElements.map(el => {
 				if (el.type === 'pencil' && el.points.length > 1) {
 					// Simplify the path before storing it to improve performance and reduce storage size.
@@ -503,12 +567,14 @@ export const useInteractions = ({
 			updateElements(finalElements);
 		}
 
+		// Reset interaction state
 		setAction("none");
 		setDrawingAngleInfo(null);
 		setResizeHandle(null);
 		rotationCenterRef.current = null;
 
 		if (action === "drawing") {
+			// Switch back to selection tool after drawing a shape (but not for pencil).
 			if (selectedTool !== "pencil") {
 				setSelectedTool("selection");
 			}
