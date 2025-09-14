@@ -13,6 +13,35 @@ import type {
 import { HANDLE_SIZE, LINE_HIT_THRESHOLD } from "./constants";
 import { normalizeRect, rotatePoint, distanceToLineSegment, getQuadraticCurveBounds, getPointOnQuadraticCurve } from "./geometry";
 
+let sharedDummyContext: CanvasRenderingContext2D | null = null;
+const getSharedDummyContext = () => {
+	if (!sharedDummyContext) {
+		const canvas = document.createElement("canvas");
+		sharedDummyContext = canvas.getContext("2d");
+	}
+	if (!sharedDummyContext) {
+		// This should be practically impossible in browsers that support canvas.
+		throw new Error("Could not create 2d context for text measurement");
+	}
+	return sharedDummyContext;
+};
+
+
+
+
+const measureText = (
+	text: string,
+	fontSize: number,
+	fontFamily: string
+): { width: number; height: number } => {
+	const dummyContext = getSharedDummyContext();
+	dummyContext.font = `${fontSize}px ${fontFamily || "'virgil', sans-serif"}`;
+	const lines = text.split("\n");
+	const widths = lines.map((line) => dummyContext.measureText(line).width);
+	// Use Math.max(0, ...) to handle empty text gracefully
+	return { width: Math.max(0, ...widths), height: lines.length * fontSize };
+};
+
 const COPY_HANDLE_OFFSET = -30; // Negative for above the element
 const ROTATION_HANDLE_OFFSET = -55; // Even further above
 
@@ -95,19 +124,7 @@ export const getHandles = (
 	}
 };
 
-const measureText = (
-	text: string,
-	fontSize: number,
-	fontFamily: string
-): { width: number; height: number } => {
-	// This is a simple measurement. For more accuracy, you might need a hidden DOM element or more complex canvas logic.
-	// For multiline text, this would need to be more sophisticated.
-	const dummyContext = document.createElement("canvas").getContext("2d")!;
-	dummyContext.font = `${fontSize}px ${fontFamily || "virgil', sans-serif"}`;
-	const lines = text.split("\n");
-	const widths = lines.map((line) => dummyContext.measureText(line).width);
-	return { width: Math.max(...widths), height: lines.length * fontSize };
-};
+
 
 const getPencilElementBounds = (
 	element: PencilElement

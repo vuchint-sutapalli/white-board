@@ -1,9 +1,9 @@
 import React, {
 	useRef,
 	useState,
+	useLayoutEffect,
 	useEffect,
 	useCallback,
-	useLayoutEffect,
 } from "react";
 import type { Element, ElementType } from "./types";
 import { STORAGE_KEY } from "./constants";
@@ -14,21 +14,39 @@ import {
 	getElementAtPosition,
 	getElementCenter,
 	roundElementProperties,
+	resizeElement,
 } from "./element";
 import { LabelEditor } from "./LabelEditor";
+import { Toolbar } from "./Toolbar";
+
+// Defines the virtual canvas dimensions. All element coordinates are relative to this size.
+// This allows the canvas to be responsive while maintaining a consistent coordinate system.
+const VIRTUAL_WIDTH = 1280;
+const VIRTUAL_HEIGHT = 720;
 
 const CanvasWhiteboard: React.FC = () => {
+	// Refs for DOM elements
 	const containerRef = useRef<HTMLDivElement>(null);
-	const staticCanvasRef = useRef<HTMLCanvasElement>(null);
-	const activeCanvasRef = useRef<HTMLCanvasElement>(null);
-	const textAreaRef = useRef<HTMLTextAreaElement>(null);
-	const elementCanvasMap = useRef<WeakMap<Element, HTMLCanvasElement>>(
-		new WeakMap()
-	);
+	const toolbarRef = useRef<HTMLDivElement>(null);
+	const staticCanvasRef = useRef<HTMLCanvasElement>(null); // Bottom canvas for static elements
+	const activeCanvasRef = useRef<HTMLCanvasElement>(null); // Top canvas for active/interactive elements
+	const textAreaRef = useRef<HTMLTextAreaElement>(null); // Text area for editing labels/text
 
+	// State for canvas dimensions and layout
 	const [width, setWidth] = useState(0);
 	const [height, setHeight] = useState(0);
+	const [toolbarHeight, setToolbarHeight] = useState(0);
+
+	// Viewport state for panning and zooming
+	const [viewTransform, setViewTransform] = useState({
+		scale: 1, // Zoom level
+		offsetX: 0, // Horizontal pan
+		offsetY: 0, // Vertical pan
+	});
+
+	// Core application state
 	const [elements, setElements] = useState<Element[]>(() => {
+		// Load elements from localStorage on initial render
 		try {
 			const saved = localStorage.getItem(STORAGE_KEY);
 			return saved ? JSON.parse(saved) : [];
@@ -40,39 +58,68 @@ const CanvasWhiteboard: React.FC = () => {
 	const [selectedTool, setSelectedTool] = useState<ElementType>("selection");
 	const [selectedElements, setSelectedElements] = useState<Element[]>([]);
 	const [editingElement, setEditingElement] = useState<Element | null>(null);
+
+	// State for the label/text editor
 	const [labelText, setLabelText] = useState("");
 	const [editorPosition, setEditorPosition] = useState<{
 		x: number;
 		y: number;
 	} | null>(null);
+
+	// State for displaying angle information during rotation/drawing
 	const [drawingAngleInfo, setDrawingAngleInfo] = useState<{
 		angle: number;
 		x: number;
 		y: number;
 	} | null>(null);
 
+	// State for keyboard modifiers (for panning)
+	const [isSpacePressed, setIsSpacePressed] = useState(false);
+	const [isCtrlPressed, setIsCtrlPressed] = useState(false);
+
+	// Effect to handle responsive canvas resizing
 	useLayoutEffect(() => {
-		const updateCanvasSize = () => {
-			const container = containerRef.current;
-			if (container) {
-				const newWidth = container.offsetWidth;
-				const newHeight = container.offsetHeight;
-				if (newWidth !== width || newHeight !== height) {
-					setWidth(newWidth);
-					setHeight(newHeight);
-					// on resize, we need to invalidate the cache
-					elementCanvasMap.current = new WeakMap();
+		const container = containerRef.current;
+		const toolbar = toolbarRef.current;
+		if (!container || !toolbar) return;
+
+		// Use ResizeObserver to efficiently detect size changes of the container and toolbar
+		const updateSizes = () => {
+			const newToolbarHeight = toolbar.offsetHeight;
+			if (newToolbarHeight !== toolbarHeight) {
+				setToolbarHeight(newToolbarHeight);
+			}
+
+			// Calculate canvas size based on container and toolbar height
+			const newHeight = container.offsetHeight - newToolbarHeight;
+			const newWidth = container.offsetWidth;
+			if (newWidth !== width || newHeight !== height) {
+				setWidth(newWidth);
+				setHeight(newHeight);
+
+				// When size changes, recalculate the view transform to fit the virtual canvas
+				// within the new dimensions, centered.
+				if (newWidth > 0 && newHeight > 0) {
+					const scale = Math.min(
+						newWidth / VIRTUAL_WIDTH,
+						newHeight / VIRTUAL_HEIGHT
+					);
+					const offsetX = (newWidth - VIRTUAL_WIDTH * scale) / 2;
+					const offsetY = (newHeight - VIRTUAL_HEIGHT * scale) / 2;
+					setViewTransform({ scale, offsetX, offsetY });
 				}
 			}
 		};
 
-		updateCanvasSize(); // Initial size
+		const observer = new ResizeObserver(updateSizes);
+		observer.observe(container);
+		observer.observe(toolbar);
 
-		window.addEventListener("resize", updateCanvasSize);
-		return () => window.removeEventListener("resize", updateCanvasSize);
-	}, [width, height]); // Rerun on size change to handle potential external changes
+		updateSizes(); // Initial call
+		return () => observer.disconnect();
+	}, [width, height, toolbarHeight]); // Dependencies for the effect
 
-	// Load/Save effects
+	// Effect to save elements to localStorage whenever they change
 	useEffect(() => {
 		// Round all numeric properties to 2 decimal places before saving.
 		// This keeps the JSON clean and small without sacrificing precision.
@@ -83,6 +130,7 @@ const CanvasWhiteboard: React.FC = () => {
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(roundedElements));
 	}, [elements]);
 
+	// Callback to delete selected elements
 	const handleDeleteSelected = useCallback(() => {
 		if (selectedElements.length === 0) return;
 		const selectedIds = new Set(selectedElements.map((el) => el.id));
@@ -90,8 +138,14 @@ const CanvasWhiteboard: React.FC = () => {
 		setSelectedElements([]);
 	}, [selectedElements]);
 
-	useKeyboard({ onDelete: handleDeleteSelected });
+	// Hook to handle keyboard shortcuts (delete, pan keys)
+	useKeyboard({
+		onDelete: handleDeleteSelected,
+		setIsSpacePressed,
+		setIsCtrlPressed,
+	});
 
+	// Effect to manage the label editor's state and position
 	useEffect(() => {
 		if (editingElement) {
 			const center = getElementCenter(editingElement);
@@ -106,17 +160,23 @@ const CanvasWhiteboard: React.FC = () => {
 		}
 	}, [editingElement]);
 
+	/**
+	 * A robust way to update elements in the state.
+	 * It handles both creating new elements and updating existing ones.
+	 * @param updatedElements An array of elements that have been created or modified.
+	 */
 	const updateElements = useCallback((updatedElements: Element[]) => {
 		const updatedElementsMap = new Map(
 			updatedElements.map((el) => [el.id, el])
 		);
 
-		// This handles both updates and creations
+		// This handles both updates and creations in a single pass
 		setElements((prevElements) => {
 			const newElements = prevElements.map(
 				(el) => updatedElementsMap.get(el.id) || el
 			);
 			const newIds = new Set(newElements.map((el) => el.id));
+			// Add any new elements that weren't in the previous state
 			updatedElements.forEach((updatedEl) => {
 				if (!newIds.has(updatedEl.id)) {
 					newElements.push(updatedEl);
@@ -126,6 +186,7 @@ const CanvasWhiteboard: React.FC = () => {
 		});
 	}, []);
 
+	// Hook for handling all user interactions (drawing, selecting, moving, etc.)
 	const {
 		selectionRect,
 		handlePointerDown,
@@ -141,13 +202,16 @@ const CanvasWhiteboard: React.FC = () => {
 		setSelectedTool,
 		setEditingElement,
 		setDrawingAngleInfo,
+		viewTransform,
+		setViewTransform,
+		isSpacePressed,
+		isCtrlPressed,
 	});
 
-	// Drawing Hook
+	// Hook for handling the rendering of both static and active canvases
 	useDrawing({
 		staticCanvasRef,
 		activeCanvasRef,
-		elementCanvasMap,
 		elements,
 		selectedElements,
 		editingElement,
@@ -155,34 +219,49 @@ const CanvasWhiteboard: React.FC = () => {
 		drawingAngleInfo,
 		width,
 		height,
+		virtualWidth: VIRTUAL_WIDTH,
+		virtualHeight: VIRTUAL_HEIGHT,
+		viewTransform,
 	});
 
+	// Handler for double-click events to start editing an element's label/text
 	const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
 		// This is a native event, not a React PointerEvent
 		const canvas = activeCanvasRef.current;
 		if (!canvas) return;
 		const rect = canvas.getBoundingClientRect();
-		const pos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+		// We need to calculate the world coordinates from the screen click
+		const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+		const worldPos = {
+			x: (screenPos.x - viewTransform.offsetX) / viewTransform.scale,
+			y: (screenPos.y - viewTransform.offsetY) / viewTransform.scale,
+		};
 
-		const element = getElementAtPosition(elements, pos);
+		const element = getElementAtPosition(elements, worldPos);
 		if (element) {
 			setEditingElement(element);
-			// deselect other elements
+			// Select only the double-clicked element
 			setSelectedElements([element]);
 		}
 	};
 
+	// Handler for changes in the label editor textarea
 	const handleLabelChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
 		setLabelText(e.target.value);
 	};
 
+	// Handler for when the label editor loses focus (onBlur)
 	const handleLabelUpdate = () => {
 		if (!editingElement) return;
 
-		const updatedElement =
-			editingElement.type === "text"
-				? { ...editingElement, text: labelText }
-				: { ...editingElement, label: labelText };
+		let updatedElement = { ...editingElement, label: labelText };
+
+		if (editingElement.type === "text") {
+			const textElement = { ...editingElement, text: labelText };
+			// Update dimensions when text changes
+			resizeElement(textElement, "bottom-right", 0, 0);
+			updatedElement = textElement;
+		}
 
 		// If a new text element is created but the text is empty, cancel the creation.
 		if (
@@ -197,6 +276,7 @@ const CanvasWhiteboard: React.FC = () => {
 		}
 
 		updateElements([updatedElement]);
+		// Also update the element within the `selectedElements` array to ensure consistency
 		setSelectedElements((prev) =>
 			prev.map((el) => (el.id === updatedElement.id ? updatedElement : el))
 		);
@@ -205,6 +285,7 @@ const CanvasWhiteboard: React.FC = () => {
 		setLabelText("");
 	};
 
+	// Handler for keyboard events within the label editor
 	const handleLabelKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault(); // Prevent new line
@@ -218,95 +299,28 @@ const CanvasWhiteboard: React.FC = () => {
 		}
 	};
 
+	// Handler for the "Clear" button in the toolbar
 	const handleClear = () => {
 		setElements([]);
 		setSelectedElements([]);
-		elementCanvasMap.current = new WeakMap();
 	};
 
 	return (
 		<div
 			ref={containerRef}
-			className="app-container font-virgil"
+			className="app-container font-virgil relative"
 			style={{ width: "100%", height: "100%" }}
 		>
-			<div className="toolbar absolute w-100vw z-50">
-				<button
-					className={`toolbar-button ${
-						selectedTool === "selection" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("selection")}
-				>
-					Select
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "rectangle" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("rectangle")}
-				>
-					Rectangle
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "diamond" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("diamond")}
-				>
-					Diamond
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "circle" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("circle")}
-				>
-					Circle
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "arrow" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("arrow")}
-				>
-					Arrow
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "pencil" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("pencil")}
-				>
-					Pencil
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "text" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("text")}
-				>
-					Text
-				</button>
-				<button
-					className={`toolbar-button ${
-						selectedTool === "line" ? "active" : ""
-					}`}
-					onClick={() => setSelectedTool("line")}
-				>
-					Line
-				</button>
-				<button
-					className="toolbar-button"
-					onClick={handleDeleteSelected}
-					disabled={selectedElements.length === 0}
-				>
-					Delete Selected
-				</button>
-				<button className="toolbar-button" onClick={handleClear}>
-					Clear
-				</button>
-			</div>
+			<Toolbar
+				ref={toolbarRef}
+				selectedTool={selectedTool}
+				setSelectedTool={setSelectedTool}
+				handleDeleteSelected={handleDeleteSelected}
+				selectedElements={selectedElements}
+				handleClear={handleClear}
+			/>
 
+			{/* Render the label editor when an element is being edited */}
 			{editingElement && editorPosition && (
 				<LabelEditor
 					ref={textAreaRef}
@@ -315,11 +329,17 @@ const CanvasWhiteboard: React.FC = () => {
 					onBlur={handleLabelUpdate}
 					onKeyDown={handleLabelKeyDown}
 					style={{
-						top: editorPosition.y,
-						left: editorPosition.x,
+						// Position the editor in screen space based on the element's world coordinates
+						top:
+							editorPosition.y * viewTransform.scale +
+							viewTransform.offsetY +
+							toolbarHeight,
+						left:
+							editorPosition.x * viewTransform.scale + viewTransform.offsetX,
 					}}
 				/>
 			)}
+			{/* The static canvas (bottom layer) for drawing non-interactive elements */}
 			<canvas
 				ref={staticCanvasRef}
 				width={width}
@@ -327,18 +347,30 @@ const CanvasWhiteboard: React.FC = () => {
 				style={{
 					position: "absolute",
 					left: 0,
-					top: 0,
+					top: `${toolbarHeight}px`,
+					width: `${width}px`,
+					height: `${height}px`,
 					border: "1px solid #ccc",
+					touchAction: "none", // Disable default touch actions like scroll/zoom
 				}}
 			/>
+			{/* The active canvas (top layer) for drawing interactive elements and handling pointer events */}
 			<canvas
 				ref={activeCanvasRef}
 				width={width}
 				height={height}
-				style={{ position: "absolute", left: 0, top: 0, zIndex: 1 }}
+				style={{
+					position: "absolute",
+					left: 0,
+					top: `${toolbarHeight}px`,
+					width: `${width}px`,
+					height: `${height}px`,
+					zIndex: 1,
+					touchAction: "none", // Disable default touch actions like scroll/zoom
+				}}
 				onPointerDown={handlePointerDown}
 				onPointerMove={handlePointerMove}
-				onPointerUp={handlePointerUp}
+				onPointerUp={(e) => handlePointerUp(e)}
 				onDoubleClick={handleDoubleClick}
 			/>
 		</div>
