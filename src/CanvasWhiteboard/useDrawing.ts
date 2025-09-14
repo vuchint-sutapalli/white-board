@@ -11,6 +11,13 @@ import { HANDLE_SIZE } from "./constants";
 import { getHandles, getElementCenter } from './element';
 import { normalizeRect } from './geometry';
 
+/**
+ * Draws the resize and rotation handles for a given element.
+ * @param ctx The canvas rendering context.
+ * @param el The element for which to draw handles.
+ * @param copyIcon The image for the copy handle.
+ * @param rotationIcon The image for the rotation handle.
+ */
 const drawResizeHandles = (
 	ctx: CanvasRenderingContext2D,
 	el: Element,
@@ -77,6 +84,12 @@ const drawResizeHandles = (
 	});
 };
 
+/**
+ * Draws a text label at the center of an element.
+ * @param ctx The canvas rendering context.
+ * @param label The text of the label.
+ * @param center The center point of the element.
+ */
 const drawLabel = (
 	ctx: CanvasRenderingContext2D,
 	label: string,
@@ -94,6 +107,11 @@ const drawLabel = (
 	ctx.restore();
 };
 
+/**
+ * Draws a pencil (free-hand) element with smoothed lines.
+ * @param ctx The canvas rendering context.
+ * @param element The pencil element to draw.
+ */
 const drawPencilElement = (
 	ctx: CanvasRenderingContext2D,
 	element: PencilElement
@@ -129,6 +147,15 @@ const drawPencilElement = (
 	ctx.restore();
 };
 
+/**
+ * The core function for drawing a single element on the canvas.
+ * It handles different element types, rotation, and highlight states.
+ * @param ctx The canvas rendering context.
+ * @param el The element to draw.
+ * @param highlight If true, draws the element in a highlighted state (e.g., red, dashed).
+ * @param copyIcon The image for the copy handle (if highlighted).
+ * @param rotationIcon The image for the rotation handle (if highlighted).
+ */
 const drawElement = (
 	ctx: CanvasRenderingContext2D,
 	el: Element,
@@ -137,6 +164,7 @@ const drawElement = (
 	rotationIcon: HTMLImageElement | null
 ) => {
 	ctx.save();
+	// Apply rotation if the element has one.
 	const center = getElementCenter(el);
 	if (el.rotation && center) {
 		ctx.translate(center.x, center.y);
@@ -147,7 +175,7 @@ const drawElement = (
 	ctx.strokeStyle = "black";
 	ctx.lineWidth = 2;
 
-	// Common highlight style
+	// Apply a common highlight style for selected elements.
 	if (highlight) {
 		ctx.strokeStyle = "red";
 		ctx.fillStyle = el.type === 'arrow' ? 'red' : ctx.fillStyle;
@@ -246,6 +274,11 @@ const drawElement = (
 	ctx.restore();
 };
 
+/**
+ * Draws the blue rectangle shown when multi-selecting elements.
+ * @param ctx The canvas rendering context.
+ * @param rect The selection rectangle element.
+ */
 const drawSelectionRect = (
 	ctx: CanvasRenderingContext2D,
 	rect: RectangleElement
@@ -260,6 +293,11 @@ const drawSelectionRect = (
 	ctx.restore();
 };
 
+/**
+ * Draws the angle indicator tooltip that appears during rotation or line drawing.
+ * @param ctx The canvas rendering context.
+ * @param info The angle and position information.
+ */
 const drawAngleIndicator = (
 	ctx: CanvasRenderingContext2D,
 	info: { angle: number; x: number; y: number }
@@ -295,6 +333,9 @@ const drawAngleIndicator = (
 	ctx.restore();
 };
 
+/**
+ * Props for the useDrawing hook.
+ */
 interface UseDrawingProps {
 	staticCanvasRef: RefObject<HTMLCanvasElement>;
 	activeCanvasRef: RefObject<HTMLCanvasElement>;
@@ -310,6 +351,12 @@ interface UseDrawingProps {
 	viewTransform: { scale: number; offsetX: number; offsetY: number };
 }
 
+/**
+ * A hook that manages all rendering operations for the whiteboard.
+ * It uses a double-buffering technique with two canvases:
+ * - `staticCanvas` (bottom layer): Renders all non-selected, static elements. It's only redrawn when elements are added, removed, or deselected.
+ * - `activeCanvas` (top layer): Renders selected elements, handles, and interaction feedback (like selection boxes). It's cleared and redrawn on every frame during an interaction.
+ */
 export const useDrawing = ({
 	staticCanvasRef,
 	activeCanvasRef,
@@ -327,6 +374,7 @@ export const useDrawing = ({
 	const copyIconRef = useRef<HTMLImageElement | null>(null);
 	const rotationIconRef = useRef<HTMLImageElement | null>(null);
 
+	// Effect to load the SVG icons for the copy and rotate handles.
 	useEffect(() => {
 		const icon = new Image();
 		const copyIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="green" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
@@ -343,6 +391,7 @@ export const useDrawing = ({
 		};
 	}, []);
 
+	// The main layout effect that orchestrates the drawing of both canvases.
 	useLayoutEffect(() => {
 		if (width === 0 || height === 0) {
 			return;
@@ -353,7 +402,7 @@ export const useDrawing = ({
 		const staticCtx = staticCanvas.getContext("2d")!;
 		staticCtx.clearRect(0, 0, staticCanvas.width, staticCanvas.height);
 
-		// Apply view transform
+		// --- Draw static canvas (bottom layer) ---
 		staticCtx.save();
 		staticCtx.translate(viewTransform.offsetX, viewTransform.offsetY);
 		staticCtx.scale(viewTransform.scale, viewTransform.scale);
@@ -362,6 +411,7 @@ export const useDrawing = ({
 			selectedElements.map((el) => el.id).concat(editingElement ? [editingElement.id] : [])
 		);
 
+		// Draw all elements that are NOT selected or being edited onto the static canvas.
 		elements.filter((el) => !selectedIds.has(el.id)).forEach((el) => {
 			drawElement(staticCtx, el, false, null, null);
 		});
@@ -373,15 +423,16 @@ export const useDrawing = ({
 		const activeCtx = activeCanvas.getContext("2d")!;
 		activeCtx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
 
-		// Apply view transform to active canvas as well
+		// --- Draw active canvas (top layer) ---
 		activeCtx.save();
 		activeCtx.translate(viewTransform.offsetX, viewTransform.offsetY);
 		activeCtx.scale(viewTransform.scale, viewTransform.scale);
 
+		// Draw all selected elements in their highlighted state.
 		selectedElements.forEach((el) => {
 			// Draw the element with its highlight, which won't include the label
 			drawElement(activeCtx, el, true, copyIconRef.current, rotationIconRef.current);
-			// Now, manually draw the label if it exists and is not being edited
+			// Manually draw the label on top, as it's not part of the highlighted element drawing.
 			if (el.label && el.id !== editingElement?.id) {
 				drawLabel(activeCtx, el.label, getElementCenter(el));
 			}
@@ -393,7 +444,7 @@ export const useDrawing = ({
 
 		activeCtx.restore();
 
-		// Draw angle indicator in screen space, after restoring the transform
+		// Draw the angle indicator in screen space, so it's not affected by canvas zoom/pan.
 		if (drawingAngleInfo) {
 			const screenX =
 				drawingAngleInfo.x * viewTransform.scale + viewTransform.offsetX;
